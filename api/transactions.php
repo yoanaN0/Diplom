@@ -132,6 +132,60 @@ function adjust_wallet_balance(PDO $pdo, int $userId, ?int $walletId, float $del
     ]);
 }
 
+function reset_monthly_budget_spend(PDO $pdo, int $userId): void
+{
+    $currentMonth = date('Y-m');
+    $monthStart = date('Y-m-01');
+    $monthEnd = date('Y-m-t');
+
+    $stmt = $pdo->prepare(
+        'SELECT id, start_date, end_date, spent_amount FROM budgets
+         WHERE user_id = :user_id AND period = :period'
+    );
+    $stmt->execute([
+        'user_id' => $userId,
+        'period' => 'monthly',
+    ]);
+
+    foreach ($stmt->fetchAll() as $budget) {
+        $startDate = $budget['start_date'];
+        $endDate = $budget['end_date'];
+
+        if ($startDate === null && $endDate === null) {
+            $pdo->prepare(
+                'UPDATE budgets
+                 SET start_date = :start_date,
+                     end_date = :end_date
+                 WHERE id = :id AND user_id = :user_id'
+            )->execute([
+                'start_date' => $monthStart,
+                'end_date' => $monthEnd,
+                'id' => (int) $budget['id'],
+                'user_id' => $userId,
+            ]);
+            continue;
+        }
+
+        $budgetMonth = $startDate ? date('Y-m', strtotime($startDate)) : $currentMonth;
+        if ($budgetMonth === $currentMonth) {
+            continue;
+        }
+
+        $pdo->prepare(
+            'UPDATE budgets
+             SET spent_amount = 0.00,
+                 start_date = :start_date,
+                 end_date = :end_date
+             WHERE id = :id AND user_id = :user_id'
+        )->execute([
+            'start_date' => $monthStart,
+            'end_date' => $monthEnd,
+            'id' => (int) $budget['id'],
+            'user_id' => $userId,
+        ]);
+    }
+}
+
 function budget_expense_delta(string $type, float $amount): float
 {
     $normalizedType = strtolower(trim($type));
@@ -144,6 +198,8 @@ function budget_expense_delta(string $type, float $amount): float
 
 function sync_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $categoryName, string $type, float $amount): void
 {
+    reset_monthly_budget_spend($pdo, $userId);
+
     if ($categoryId === null || $categoryName === '') {
         return;
     }
@@ -194,6 +250,8 @@ function sync_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $cate
 
 function reverse_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $categoryName, string $type, float $amount): void
 {
+    reset_monthly_budget_spend($pdo, $userId);
+
     if ($categoryId === null || $categoryName === '') {
         return;
     }
