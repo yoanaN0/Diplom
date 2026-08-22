@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 
 import {
 	calculateGoalProgress,
@@ -12,6 +12,7 @@ import {
 	createGoal as createGoalRequest,
 	deleteGoal as deleteGoalRequest,
 	getGoals,
+	isGoalCompleted,
 	updateGoal,
 } from "../services/goalsApi";
 import { createTransaction } from "../services/transactionsApi";
@@ -62,6 +63,7 @@ function Goals() {
 		isOpen: false,
 		goalId: null,
 		goalTitle: "",
+		mode: "active",
 	});
 	const [newGoal, setNewGoal] = useState({ title: "", target: "", deadline: "" });
 	const [loading, setLoading] = useState(true);
@@ -158,6 +160,7 @@ function Goals() {
 			isOpen: true,
 			goalId: goal.id,
 			goalTitle: goal.title,
+			mode: isGoalCompleted(goal) ? "archive" : "active",
 		});
 		setError("");
 	};
@@ -167,7 +170,33 @@ function Goals() {
 			isOpen: false,
 			goalId: null,
 			goalTitle: "",
+			mode: "active",
 		});
+	};
+
+	const archiveCompletedGoal = async (goalId) => {
+		const goal = goals.find((item) => Number(item.id) === Number(goalId));
+		if (!goal) {
+			return;
+		}
+
+		try {
+			await createTransaction({
+				type: "expense",
+				title: `Платени и архивирани: ${goal.title}`,
+				amount: Number(goal.saved || 0),
+				wallet: "Цели",
+				category: "Спестяване",
+				note: `Целта ${goal.title} е изпълнена и средствата са отчетени като платени.`,
+				tags: ["#goal-completed", "#goal-archive"],
+				receipt: "",
+			});
+			await deleteGoalRequest(goal.id, { skipRefund: true });
+			await refreshGoalAndWalletState();
+			closeDeleteGoalModal();
+		} catch {
+			setError("Неуспешно архивиране на изпълнената цел.");
+		}
 	};
 
 	const handleDeleteGoal = async (event) => {
@@ -179,6 +208,11 @@ function Goals() {
 		}
 
 		try {
+			if (goalDeleteModal.mode === "archive") {
+				await archiveCompletedGoal(goalId);
+				return;
+			}
+
 			await deleteGoalRequest(goalId);
 			await refreshGoalAndWalletState();
 			closeDeleteGoalModal();
@@ -250,7 +284,6 @@ function Goals() {
 		setTransferError("");
 		setTransferDraft(initialTransferDraft);
 	};
-
 
 	const submitTransfer = async (event) => {
 		event.preventDefault();
@@ -351,7 +384,6 @@ function Goals() {
 				setTransferError("Неуспешно запаметяване на прехвърлянето между целите.");
 				return;
 			}
-
 		} else {
 			if (!selectedSource) {
 				setTransferError("Избери източник на средства.");
@@ -405,7 +437,7 @@ function Goals() {
 			<section className="finance-header">
 				<div>
 					<h1>Цели за спестяване</h1>
-					<p>Създавай цели, добавяй пари от източник или прехвърляй между цели.</p>
+					<p>Създавай цели, добавяй пари от източници или прехвърляй между цели.</p>
 				</div>
 			</section>
 
@@ -453,6 +485,7 @@ function Goals() {
 					<div className="goals-list">
 						{goals.map((goal) => {
 							const progress = calculateGoalProgress(goal);
+							const completed = isGoalCompleted(goal);
 							return (
 								<article key={goal.id} className="goal-card">
 									<div className="goal-card__head">
@@ -472,195 +505,212 @@ function Goals() {
 									</div>
 
 									<div className="goal-card__actions">
-										<button
-											type="button"
-											className="button button--ghost"
-											onClick={() => openAddModal(goal.id)}
-										>
-											Добави
-										</button>
-										<button
-											type="button"
-											className="button button--primary"
-											onClick={() => openGoalTransferModal(goal.id)}
-										>
-											Прехвърли
-										</button>
+										{!completed ? (
+											<button
+												type="button"
+												className="button button--ghost"
+												onClick={() => openAddModal(goal.id)}
+											>
+												Добави
+											</button>
+										) : null}
+										{!completed ? (
+											<button
+												type="button"
+												className="button button--primary"
+												onClick={() => openGoalTransferModal(goal.id)}
+											>
+												Прехвърли
+											</button>
+										) : null}
+										{completed ? (
 											<button
 												type="button"
 												className="button button--ghost button--danger"
 												onClick={() => openDeleteGoalModal(goal.id)}
-										>
-											Премахни цел
-										</button>
+											>
+												Платени
+											</button>
+										) : (
+											<button
+												type="button"
+												className="button button--ghost button--danger"
+												onClick={() => openDeleteGoalModal(goal.id)}
+											>
+												Премахни цел
+											</button>
+										)}
 									</div>
 								</article>
 							);
-						})}
-					</div>
-				</article>
-
-			</section>
-
-			{goalDeleteModal.isOpen ? (
-				<div
-					className="modal-shell"
-					role="dialog"
-					aria-modal="true"
-					aria-label="Премахване на цел"
-				>
-					<form className="surface-card modal-card" onSubmit={handleDeleteGoal}>
-						<div className="surface-card__head">
-							<h2>Премахване на цел</h2>
+							})}
 						</div>
+					</article>
+				</section>
 
-						<div className="filter-grid">
-							<label>
-								<span>Цел</span>
-								<input type="text" value={goalDeleteModal.goalTitle} readOnly />
-							</label>
+				{goalDeleteModal.isOpen ? (
+					<div
+						className="modal-shell"
+						role="dialog"
+						aria-modal="true"
+						aria-label="Премахване на цел"
+					>
+						<form className="surface-card modal-card" onSubmit={handleDeleteGoal}>
+							<div className="surface-card__head">
+								<h2>Премахване на цел</h2>
+							</div>
 
-							<label>
-								<span>Връщане на средствата</span>
-								<input
-									type="text"
-									value="Парите ще се върнат обратно към източниците, от които са били добавени."
-									readOnly
-								/>
-							</label>
-						</div>
-
-						{error ? <p className="muted">{error}</p> : null}
-
-						<div className="modal-actions">
-							<button type="button" className="button button--ghost" onClick={closeDeleteGoalModal}>
-								Отказ
-							</button>
-							<button type="submit" className="button button--danger">
-								Премахни цел
-							</button>
-						</div>
-					</form>
-				</div>
-			) : null}
-
-			{isTransferModalOpen ? (
-				<div
-					className="modal-shell"
-					role="dialog"
-					aria-modal="true"
-					aria-label={
-						transferDraft.mode === "goal-transfer"
-							? "Прехвърляне между цели"
-							: "Добавяне към цел"
-					}
-				>
-					<form className="surface-card modal-card" onSubmit={submitTransfer}>
-						<div className="surface-card__head">
-							<h2>
-								{transferDraft.mode === "goal-transfer"
-									? "Прехвърляне между цели"
-									: "Добавяне към цел"}
-							</h2>
-						</div>
-
-						<div className="filter-grid">
-							<label>
-								<span>Към цел</span>
-								<select
-									value={transferDraft.toGoalId}
-									onChange={(event) =>
-										setTransferDraft((current) => ({ ...current, toGoalId: event.target.value }))
-									}
-								>
-									<option value="">Избери цел</option>
-									{goals.map((goal) => (
-										<option key={goal.id} value={goal.id}>
-											{goal.title}
-										</option>
-									))}
-								</select>
-							</label>
-
-							{transferDraft.mode === "goal-transfer" ? (
+							<div className="filter-grid">
 								<label>
-									<span>От цел</span>
-									<select
-										value={transferDraft.fromGoalId}
-										onChange={(event) =>
-											setTransferDraft((current) => ({ ...current, fromGoalId: event.target.value }))
-										}
-									>
-										<option value="">Избери изходна цел</option>
-										{goals
-											.filter((goal) => Number(goal.id) !== Number(transferDraft.toGoalId))
-											.map((goal) => (
-												<option key={goal.id} value={goal.id}>
-													{goal.title} • Наличност: {formatEur(goal.saved)}
-												</option>
-											))}
-									</select>
+									<span>Цел</span>
+									<input type="text" value={goalDeleteModal.goalTitle} readOnly />
 								</label>
-							) : (
+
 								<label>
-									<span>От портфейл/сметка</span>
+									<span>{goalDeleteModal.mode === "archive" ? "Разход срещу реална покупка" : "Връщане на средствата"}</span>
+									<input
+										type="text"
+										value={
+											goalDeleteModal.mode === "archive"
+												? "Целта е изпълнена. Парите се считат за похарчени и няма да бъдат върнати по сметката."
+												: "Парите ще се върнат обратно към източниците, от които са били добавени."
+										}
+										readOnly
+									/>
+								</label>
+							</div>
+
+							{error ? <p className="muted">{error}</p> : null}
+
+							<div className="modal-actions">
+								<button type="button" className="button button--ghost" onClick={closeDeleteGoalModal}>
+									Отказ
+								</button>
+								<button type="submit" className="button button--danger">
+									{goalDeleteModal.mode === "archive" ? "Платени" : "Премахни цел"}
+								</button>
+							</div>
+						</form>
+					</div>
+				) : null}
+
+				{isTransferModalOpen ? (
+					<div
+						className="modal-shell"
+						role="dialog"
+						aria-modal="true"
+						aria-label={
+							transferDraft.mode === "goal-transfer"
+								? "Прехвърляне между цели"
+								: "Добавяне към цел"
+						}
+					>
+						<form className="surface-card modal-card" onSubmit={submitTransfer}>
+							<div className="surface-card__head">
+								<h2>
+									{transferDraft.mode === "goal-transfer"
+										? "Прехвърляне между цели"
+										: "Добавяне към цел"}
+								</h2>
+							</div>
+
+							<div className="filter-grid">
+								<label>
+									<span>Към цел</span>
 									<select
-										value={transferDraft.sourceId}
+										value={transferDraft.toGoalId}
 										onChange={(event) =>
-											setTransferDraft((current) => ({ ...current, sourceId: event.target.value }))
+											setTransferDraft((current) => ({ ...current, toGoalId: event.target.value }))
 										}
 									>
-										<option value="">Избери източник</option>
-										{fundingSources.map((source) => (
-											<option key={source.id} value={source.id}>
-												{source.name} • Наличност: {formatEur(source.balance)}
+										<option value="">Избери цел</option>
+										{goals.map((goal) => (
+											<option key={goal.id} value={goal.id}>
+												{goal.title}
 											</option>
 										))}
 									</select>
 								</label>
-							)}
 
-							<label>
-								<span>Сума</span>
-								<input
-									type="number"
-									step="0.01"
-									min="0"
-									value={transferDraft.amount}
-									onChange={(event) =>
-										setTransferDraft((current) => ({ ...current, amount: event.target.value }))
-									}
-								/>
-							</label>
+								{transferDraft.mode === "goal-transfer" ? (
+									<label>
+										<span>От цел</span>
+										<select
+											value={transferDraft.fromGoalId}
+											onChange={(event) =>
+												setTransferDraft((current) => ({ ...current, fromGoalId: event.target.value }))
+											}
+										>
+											<option value="">Избери изходна цел</option>
+											{goals
+												.filter((goal) => Number(goal.id) !== Number(transferDraft.toGoalId))
+												.map((goal) => (
+													<option key={goal.id} value={goal.id}>
+														{goal.title} • Наличност: {formatEur(goal.saved)}
+													</option>
+												))}
+										</select>
+									</label>
+								) : (
+									<label>
+										<span>От портфейл/сметка</span>
+										<select
+											value={transferDraft.sourceId}
+											onChange={(event) =>
+												setTransferDraft((current) => ({ ...current, sourceId: event.target.value }))
+											}
+										>
+											<option value="">Избери източник</option>
+											{fundingSources.map((source) => (
+												<option key={source.id} value={source.id}>
+													{source.name} • Наличност: {formatEur(source.balance)}
+												</option>
+											))}
+										</select>
+									</label>
+								)}
 
-							<label>
-								<span>Бележка (по желание)</span>
-								<input
-									type="text"
-									placeholder="напр. Ръчно заделяне"
-									value={transferDraft.note}
-									onChange={(event) =>
-										setTransferDraft((current) => ({ ...current, note: event.target.value }))
-									}
-								/>
-							</label>
-						</div>
+								<label>
+									<span>Сума</span>
+									<input
+										type="number"
+										step="0.01"
+										min="0"
+										value={transferDraft.amount}
+										onChange={(event) =>
+											setTransferDraft((current) => ({ ...current, amount: event.target.value }))
+										}
+									/>
+								</label>
 
-						{transferError ? <p className="muted">{transferError}</p> : null}
+								<label>
+									<span>Бележка (по желание)</span>
+									<input
+										type="text"
+										placeholder="Напр. Лично задължение"
+										value={transferDraft.note}
+										onChange={(event) =>
+											setTransferDraft((current) => ({ ...current, note: event.target.value }))
+										}
+									/>
+								</label>
+							</div>
 
-						<div className="modal-actions">
-							<button type="button" className="button button--ghost" onClick={closeTransferModal}>
-								Отказ
-							</button>
-							<button type="submit" className="button button--primary">
-								{transferDraft.mode === "goal-transfer"
-									? "Потвърди прехвърляне"
-									: "Потвърди добавяне"}
-							</button>
-						</div>
-					</form>
-				</div>
-			) : null}
+							{transferError ? <p className="muted">{transferError}</p> : null}
+
+							<div className="modal-actions">
+								<button type="button" className="button button--ghost" onClick={closeTransferModal}>
+									Отказ
+								</button>
+								<button type="submit" className="button button--primary">
+									{transferDraft.mode === "goal-transfer"
+										? "Потвърди прехвърляне"
+										: "Потвърди добавяне"}
+								</button>
+							</div>
+						</form>
+					</div>
+				) : null}
 		</div>
 	);
 }

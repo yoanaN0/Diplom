@@ -309,18 +309,18 @@ if ($method === 'PUT') {
 }
 
 if ($method === 'DELETE') {
-    // 1. Вземане на ID от тялото на заявката или от URL параметрите
     $id = api_int_or_null($data['id'] ?? $_GET['id'] ?? null);
     if (!$id) {
         json_response(422, ['ok' => false, 'error' => 'Задължително е въвеждането на goal ID']);
     }
 
+    $skipRefund = filter_var($data['skipRefund'] ?? $data['skip_refund'] ?? false, FILTER_VALIDATE_BOOLEAN);
     $refundWalletId = api_int_or_null($data['refundWalletId'] ?? $data['refund_wallet_id'] ?? $_GET['refundWalletId'] ?? null);
 
     try {
         $pdo->beginTransaction();
 
-        $goalStmt = $pdo->prepare('SELECT id, title, saved_amount FROM goals WHERE id = :id AND user_id = :user_id LIMIT 1 FOR UPDATE');
+        $goalStmt = $pdo->prepare('SELECT id, title, saved_amount, funding_wallets, funding_sources FROM goals WHERE id = :id AND user_id = :user_id LIMIT 1 FOR UPDATE');
         $goalStmt->execute(['id' => $id, 'user_id' => $userId]);
         $goal = $goalStmt->fetch();
 
@@ -329,79 +329,79 @@ if ($method === 'DELETE') {
             json_response(404, ['ok' => false, 'error' => 'Целта не е намерена']);
         }
 
-        $sourceRefunds = [];
-        if (in_array('funding_wallets', goal_table_columns($pdo), true) && isset($goal['funding_wallets'])) {
-            $sourceRefunds = decode_goal_funding_wallets($goal['funding_wallets']);
-        }
-
-        if ($sourceRefunds === []) {
-            $sourceRefundStmt = $pdo->prepare(
-                'SELECT wallet_id, ROUND(SUM(amount), 2) AS refund_amount
-                 FROM transactions
-                 WHERE user_id = :user_id AND goal_id = :goal_id AND wallet_id IS NOT NULL
-                 GROUP BY wallet_id'
-            );
-            $sourceRefundStmt->execute(['user_id' => $userId, 'goal_id' => $id]);
-            $sourceRefundRows = $sourceRefundStmt->fetchAll();
-
-            foreach ($sourceRefundRows as $sourceRefund) {
-                $sourceRefunds[] = [
-                    'walletId' => (int) $sourceRefund['wallet_id'],
-                    'amount' => (float) $sourceRefund['refund_amount'],
-                ];
-            }
-        }
-
-        foreach ($sourceRefunds as $sourceRefund) {
-            $walletId = (int) ($sourceRefund['walletId'] ?? $sourceRefund['wallet_id'] ?? 0);
-            $refundAmount = (float) ($sourceRefund['amount'] ?? $sourceRefund['value'] ?? 0.0);
-
-            if ($walletId <= 0 || $refundAmount <= 0) {
-                continue;
+        if (!$skipRefund) {
+            $sourceRefunds = [];
+            if (in_array('funding_wallets', goal_table_columns($pdo), true) && isset($goal['funding_wallets'])) {
+                $sourceRefunds = decode_goal_funding_wallets($goal['funding_wallets']);
             }
 
-            $walletUpdate = $pdo->prepare(
-                'UPDATE wallets
-                 SET balance = ROUND(balance + :delta, 2)
-                 WHERE id = :wallet_id AND user_id = :user_id'
-            );
-            $walletUpdate->execute([
-                'delta' => number_format($refundAmount, 2, '.', ''),
-                'wallet_id' => $walletId,
-                'user_id' => $userId,
-            ]);
-        }
+            if ($sourceRefunds === []) {
+                $sourceRefundStmt = $pdo->prepare(
+                    'SELECT wallet_id, ROUND(SUM(amount), 2) AS refund_amount
+                     FROM transactions
+                     WHERE user_id = :user_id AND goal_id = :goal_id AND wallet_id IS NOT NULL
+                     GROUP BY wallet_id'
+                );
+                $sourceRefundStmt->execute(['user_id' => $userId, 'goal_id' => $id]);
+                $sourceRefundRows = $sourceRefundStmt->fetchAll();
 
-        if ($sourceRefunds === [] && $refundWalletId) {
-            $walletStmt = $pdo->prepare('SELECT id, name FROM wallets WHERE id = :id AND user_id = :user_id LIMIT 1');
-            $walletStmt->execute(['id' => $refundWalletId, 'user_id' => $userId]);
-            $wallet = $walletStmt->fetch();
+                foreach ($sourceRefundRows as $sourceRefund) {
+                    $sourceRefunds[] = [
+                        'walletId' => (int) $sourceRefund['wallet_id'],
+                        'amount' => (float) $sourceRefund['refund_amount'],
+                    ];
+                }
+            }
 
-            if ($wallet) {
+            foreach ($sourceRefunds as $sourceRefund) {
+                $walletId = (int) ($sourceRefund['walletId'] ?? $sourceRefund['wallet_id'] ?? 0);
+                $refundAmount = (float) ($sourceRefund['amount'] ?? $sourceRefund['value'] ?? 0.0);
+
+                if ($walletId <= 0 || $refundAmount <= 0) {
+                    continue;
+                }
+
                 $walletUpdate = $pdo->prepare(
                     'UPDATE wallets
                      SET balance = ROUND(balance + :delta, 2)
                      WHERE id = :wallet_id AND user_id = :user_id'
                 );
                 $walletUpdate->execute([
-                    'delta' => number_format((float) $goal['saved_amount'], 2, '.', ''),
-                    'wallet_id' => $refundWalletId,
+                    'delta' => number_format($refundAmount, 2, '.', ''),
+                    'wallet_id' => $walletId,
                     'user_id' => $userId,
                 ]);
+            }
+
+            if ($sourceRefunds === [] && $refundWalletId) {
+                $walletStmt = $pdo->prepare('SELECT id, name FROM wallets WHERE id = :id AND user_id = :user_id LIMIT 1');
+                $walletStmt->execute(['id' => $refundWalletId, 'user_id' => $userId]);
+                $wallet = $walletStmt->fetch();
+
+                if ($wallet) {
+                    $walletUpdate = $pdo->prepare(
+                        'UPDATE wallets
+                         SET balance = ROUND(balance + :delta, 2)
+                         WHERE id = :wallet_id AND user_id = :user_id'
+                    );
+                    $walletUpdate->execute([
+                        'delta' => number_format((float) $goal['saved_amount'], 2, '.', ''),
+                        'wallet_id' => $refundWalletId,
+                        'user_id' => $userId,
+                    ]);
+                }
             }
         }
 
         $deleteGoalTx = $pdo->prepare('DELETE FROM transactions WHERE user_id = :user_id AND goal_id = :goal_id');
         $deleteGoalTx->execute(['user_id' => $userId, 'goal_id' => $id]);
 
-        // 5. Изтриване от goal_movements (ако таблицата съществува)
         $rowCheck = $pdo->query("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'goal_movements' LIMIT 1");
         if ($rowCheck && $rowCheck->fetch()) {
             $pdo->prepare('DELETE FROM goal_movements WHERE user_id = :user_id AND goal_id = :goal_id')
                 ->execute(['user_id' => $userId, 'goal_id' => $id]);
         }
 
-        // 6. Изтриване на самата цел
         $deleteGoal = $pdo->prepare('DELETE FROM goals WHERE id = :id AND user_id = :user_id');
         $deleteGoal->execute(['id' => $id, 'user_id' => $userId]);
 
@@ -411,7 +411,6 @@ if ($method === 'DELETE') {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
         }
-        // Извежда точната грешка, за да се разбере какъв е проблемът
         json_response(500, ['ok' => false, 'error' => 'Грешка при изтриване: ' . $e->getMessage()]);
     }
 }

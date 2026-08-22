@@ -34,6 +34,18 @@ function normalizeGoal(item) {
   };
 }
 
+export function isGoalCompleted(goal) {
+  const status = String(goal?.status ?? '').trim().toLowerCase();
+  const target = Number(goal?.target ?? goal?.target_amount ?? 0);
+  const saved = Number(goal?.saved ?? goal?.saved_amount ?? 0);
+
+  if (status === 'completed' || status === 'funded') {
+    return true;
+  }
+
+  return target > 0 && saved >= target;
+}
+
 export function getGoalRefundByWallet(transactions, goalId, selectedWalletId = null) {
   const byWallet = new Map();
 
@@ -96,12 +108,21 @@ export async function updateGoal(payload) {
   return normalizeGoal(result.goal);
 }
 
-export async function deleteGoal(id, refundWalletId = null) {
+export async function deleteGoal(id, refundWalletId = null, options = {}) {
+  const optionBag = typeof refundWalletId === 'object' && refundWalletId !== null
+    ? refundWalletId
+    : options;
+
+  const payload = {
+    id,
+    ...(typeof refundWalletId === 'number' || typeof refundWalletId === 'string'
+      ? { refundWalletId: Number(refundWalletId) }
+      : {}),
+    ...(optionBag?.skipRefund ? { skipRefund: true } : {}),
+  };
+
   await apiRequest("/goals.php", {
     method: "DELETE",
-    body: JSON.stringify({
-      id,
-      ...(refundWalletId ? { refundWalletId } : {}),
-    }),
+    body: JSON.stringify(payload),
   });
 }
