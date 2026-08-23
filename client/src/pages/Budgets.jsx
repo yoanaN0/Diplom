@@ -18,6 +18,7 @@ function Budgets() {
 	const [categories, setCategories] = useState([]);
 	const [budgets, setBudgets] = useState([]);
 	const [newBudget, setNewBudget] = useState({ category: "", limit: "", isFixed: false });
+	const [isAddingBudget, setIsAddingBudget] = useState(false);
 	const [isCreatingCategory, setIsCreatingCategory] = useState(false);
 	const [editingBudgetId, setEditingBudgetId] = useState(null);
 	const [budgetNameDraft, setBudgetNameDraft] = useState("");
@@ -145,6 +146,7 @@ function Budgets() {
 				});
 				setBudgets((current) => [...current, created]);
 				setNewBudget({ category: "", limit: "", isFixed: false });
+				setIsAddingBudget(false);
 			} catch {
 				setError("Неуспешно създаване на бюджет.");
 			} finally {
@@ -238,39 +240,65 @@ function Budgets() {
 					{loading ? <p className="muted">Зареждане на бюджети...</p> : null}
 					{error ? <p className="muted">{error}</p> : null}
 
-					<form className="inline-form" onSubmit={addBudget}>
-						<input
-							type="text"
-							placeholder="Име на категория/бюджет"
-							value={newBudget.category}
-							onChange={(event) =>
-								setNewBudget((current) => ({ ...current, category: event.target.value }))
-							}
-						/>
-						<input
-							type="number"
-							step="0.01"
-							min="0"
-							placeholder="Лимит"
-							value={newBudget.limit}
-							onChange={(event) =>
-								setNewBudget((current) => ({ ...current, limit: event.target.value }))
-							}
-						/>
-						<label className="checkbox-row">
+					{!isAddingBudget ? (
+						<div className="budget-add-trigger">
+							<button
+								type="button"
+								className="button button--primary"
+								onClick={() => {
+									setIsAddingBudget(true);
+									setError("");
+								}}
+							>
+								Добави бюджет
+							</button>
+						</div>
+					) : (
+						<form className="inline-form budget-add-form" onSubmit={addBudget}>
 							<input
-								type="checkbox"
-								checked={newBudget.isFixed}
+								type="text"
+								placeholder="Име на категория/бюджет"
+								value={newBudget.category}
 								onChange={(event) =>
-									setNewBudget((current) => ({ ...current, isFixed: event.target.checked }))
+									setNewBudget((current) => ({ ...current, category: event.target.value }))
 								}
 							/>
-							<span>Фиксиран разход</span>
-						</label>
-						<button type="submit" className="button button--primary" disabled={isCreatingCategory}>
-							{isCreatingCategory ? "Създаване..." : "Добави бюджет"}
-						</button>
-					</form>
+							<input
+								type="number"
+								step="0.01"
+								min="0"
+								placeholder="Лимит"
+								value={newBudget.limit}
+								onChange={(event) =>
+									setNewBudget((current) => ({ ...current, limit: event.target.value }))
+								}
+							/>
+							<label className="checkbox-row">
+								<input
+									type="checkbox"
+									checked={newBudget.isFixed}
+									onChange={(event) =>
+										setNewBudget((current) => ({ ...current, isFixed: event.target.checked }))
+									}
+								/>
+								<span>Фиксиран разход</span>
+							</label>
+							<button type="submit" className="button button--primary" disabled={isCreatingCategory}>
+								{isCreatingCategory ? "Създаване..." : "Запази бюджет"}
+							</button>
+							<button
+								type="button"
+								className="button button--ghost"
+								onClick={() => {
+									setIsAddingBudget(false);
+									setNewBudget({ category: "", limit: "", isFixed: false });
+									setError("");
+								}}
+							>
+								Отказ
+							</button>
+						</form>
+					)}
 
 					<div className="budget-progress-list">
 						{budgets.map((budget) => {

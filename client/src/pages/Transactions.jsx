@@ -50,11 +50,18 @@ const typeFilterButtons = [
 
 function isTransferTransaction(entry) {
 	const tags = Array.isArray(entry.tags) ? entry.tags : [];
+	const category = String(entry.category || "").trim();
+	const title = String(entry.title || "").trim();
+
 	if (tags.includes("#goal-transfer")) {
 		return true;
 	}
 
-	return entry.category === "Спестяване" && String(entry.title || "").startsWith("Трансфер към цел:");
+	if (category === "Спестяване") {
+		return title.startsWith("Трансфер към цел:");
+	}
+
+	return false;
 }
 
 function Transactions() {

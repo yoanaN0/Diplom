@@ -2045,6 +2045,16 @@ code,
   margin-top: 12px;
 }
 
+.budget-add-trigger {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+.budget-add-form {
+  margin-bottom: 16px;
+}
+
 .wallet-form {
   display: grid;
   gap: 10px;
@@ -2154,8 +2164,18 @@ code,
   gap: 14px;
 }
 
+.wallet-item__actions,
+.bank-item__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .wallet-item .button,
-.bank-item__actions .button {
+.bank-item__actions .button,
+.wallet-item__actions .button {
   white-space: nowrap;
 }
 

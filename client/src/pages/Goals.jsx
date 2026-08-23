@@ -397,7 +397,7 @@ function Goals() {
 
 			try {
 				await createTransaction({
-					type: "expense",
+					type: "transfer",
 					title: `Трансфер към цел: ${selectedTargetGoal.title}`,
 					amount,
 					wallet: selectedSource.name,

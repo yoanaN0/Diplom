@@ -40,11 +40,10 @@ function reset_monthly_budget_spend(PDO $pdo, int $userId): void
 
     $stmt = $pdo->prepare(
         'SELECT id, start_date, end_date, spent_amount FROM budgets
-         WHERE user_id = :user_id AND period = :period'
+         WHERE user_id = :user_id'
     );
     $stmt->execute([
         'user_id' => $userId,
-        'period' => 'monthly',
     ]);
 
     foreach ($stmt->fetchAll() as $budget) {

@@ -99,6 +99,66 @@ function resolve_category(PDO $pdo, int $userId, array $data): array
     json_response(422, ['ok' => false, 'error' => 'Category is required']);
 }
 
+function is_goal_funding_transfer(array $data, string $type, string $categoryLabel, string $title): bool
+{
+    $normalizedType = strtolower(trim($type));
+    if ($normalizedType !== 'transfer') {
+        return false;
+    }
+
+    $category = strtolower(trim($categoryLabel));
+    if ($category !== 'спестяване' && $category !== 'savings') {
+        return false;
+    }
+
+    $normalizedTitle = strtolower(trim($title));
+    if (!str_starts_with($normalizedTitle, 'трансфер към цел:')) {
+        $rawTags = $data['tags'] ?? $data['tags_text'] ?? null;
+        $tags = is_array($rawTags) ? $rawTags : api_tags_to_array((string) $rawTags);
+
+        foreach ($tags as $tag) {
+            $normalizedTag = strtolower(trim((string) $tag));
+            if ($normalizedTag === '#goal-funding' || $normalizedTag === '#goal-transfer') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+function is_goal_archive_transaction(array $data, string $type, string $categoryLabel, string $title): bool
+{
+    $normalizedType = strtolower(trim($type));
+    if ($normalizedType !== 'expense') {
+        return false;
+    }
+
+    $category = strtolower(trim($categoryLabel));
+    if ($category !== 'спестяване' && $category !== 'savings') {
+        return false;
+    }
+
+    $normalizedTitle = strtolower(trim($title));
+    if (str_starts_with($normalizedTitle, 'платени и архивирани:')) {
+        return true;
+    }
+
+    $rawTags = $data['tags'] ?? $data['tags_text'] ?? null;
+    $tags = is_array($rawTags) ? $rawTags : api_tags_to_array((string) $rawTags);
+
+    foreach ($tags as $tag) {
+        $normalizedTag = strtolower(trim((string) $tag));
+        if ($normalizedTag === '#goal-archive' || $normalizedTag === '#goal-completed') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 function transaction_wallet_delta(string $type, float $amount): float
 {
     $normalizedType = strtolower(trim($type));
@@ -140,11 +200,10 @@ function reset_monthly_budget_spend(PDO $pdo, int $userId): void
 
     $stmt = $pdo->prepare(
         'SELECT id, start_date, end_date, spent_amount FROM budgets
-         WHERE user_id = :user_id AND period = :period'
+         WHERE user_id = :user_id'
     );
     $stmt->execute([
         'user_id' => $userId,
-        'period' => 'monthly',
     ]);
 
     foreach ($stmt->fetchAll() as $budget) {
@@ -186,6 +245,13 @@ function reset_monthly_budget_spend(PDO $pdo, int $userId): void
     }
 }
 
+function is_savings_category(string $categoryName): bool
+{
+    $normalized = strtolower(trim($categoryName));
+
+    return $normalized === 'спестяване' || $normalized === 'savings';
+}
+
 function budget_expense_delta(string $type, float $amount): float
 {
     $normalizedType = strtolower(trim($type));
@@ -201,6 +267,10 @@ function sync_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $cate
     reset_monthly_budget_spend($pdo, $userId);
 
     if ($categoryId === null || $categoryName === '') {
+        return;
+    }
+
+    if (is_savings_category($categoryName)) {
         return;
     }
 
@@ -253,6 +323,10 @@ function reverse_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $c
     reset_monthly_budget_spend($pdo, $userId);
 
     if ($categoryId === null || $categoryName === '') {
+        return;
+    }
+
+    if (is_savings_category($categoryName)) {
         return;
     }
 
@@ -356,7 +430,14 @@ if ($method === 'POST') {
     ]);
 
     $id = (int) $pdo->lastInsertId();
-    $walletDelta = transaction_wallet_delta($type, (float) $amount);
+    if (is_goal_funding_transfer($data, $type, $category['label'], $title)) {
+        $walletDelta = -((float) $amount);
+    } elseif (is_goal_archive_transaction($data, $type, $category['label'], $title)) {
+        $walletDelta = 0.0;
+    } else {
+        $walletDelta = transaction_wallet_delta($type, (float) $amount);
+    }
+
     adjust_wallet_balance($pdo, $userId, $wallet['id'], $walletDelta);
     sync_budget_spend($pdo, $userId, $category['id'], $category['label'], $type, (float) $amount);
 
@@ -393,9 +474,13 @@ if ($method === 'PUT') {
 
     $oldWalletId = $existing['wallet_id'] === null ? null : (int) $existing['wallet_id'];
     $oldAmount = (float) $existing['amount'];
-    $oldDelta = transaction_wallet_delta((string) $existing['type'], $oldAmount);
+    $oldIsFundingTransfer = is_goal_funding_transfer(['tags' => $existing['tags_text'] ?? ''], (string) $existing['type'], (string) ($existing['category_label'] ?? ''), (string) ($existing['title'] ?? ''));
+    $oldIsArchive = is_goal_archive_transaction(['tags' => $existing['tags_text'] ?? ''], (string) $existing['type'], (string) ($existing['category_label'] ?? ''), (string) ($existing['title'] ?? ''));
+    $newIsFundingTransfer = is_goal_funding_transfer($data, $type, $category['label'], $title);
+    $newIsArchive = is_goal_archive_transaction($data, $type, $category['label'], $title);
+    $oldDelta = $oldIsFundingTransfer ? -$oldAmount : ($oldIsArchive ? 0.0 : transaction_wallet_delta((string) $existing['type'], $oldAmount));
     $newAmount = (float) ($amount ?? $oldAmount);
-    $newDelta = transaction_wallet_delta($type, $newAmount);
+    $newDelta = $newIsFundingTransfer ? -$newAmount : ($newIsArchive ? 0.0 : transaction_wallet_delta($type, $newAmount));
 
     $stmt = $pdo->prepare(
         'UPDATE transactions
@@ -470,7 +555,9 @@ if ($method === 'DELETE') {
     }
 
     $walletId = $existing['wallet_id'] === null ? null : (int) $existing['wallet_id'];
-    $walletDelta = transaction_wallet_delta((string) $existing['type'], (float) $existing['amount']);
+    $isFundingTransferDelete = is_goal_funding_transfer(['tags' => $existing['tags_text'] ?? ''], (string) $existing['type'], (string) ($existing['category_label'] ?? ''), (string) ($existing['title'] ?? ''));
+    $isArchiveDelete = is_goal_archive_transaction(['tags' => $existing['tags_text'] ?? ''], (string) $existing['type'], (string) ($existing['category_label'] ?? ''), (string) ($existing['title'] ?? ''));
+    $walletDelta = $isFundingTransferDelete ? -((float) $existing['amount']) : ($isArchiveDelete ? 0.0 : transaction_wallet_delta((string) $existing['type'], (float) $existing['amount']));
 
     $stmt = $pdo->prepare('DELETE FROM transactions WHERE id = :id AND user_id = :user_id');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);

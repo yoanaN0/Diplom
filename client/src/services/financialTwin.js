@@ -88,8 +88,11 @@ function detectRecurringTransactions(transactions, now = new Date()) {
     const date = toDate(entry.date);
     const amount = normalizeAmount(entry);
     const type = entry.type === "income" ? "income" : "expense";
+    const incomeCategory = String(entry.category || "").trim();
+    const incomeTitle = String(entry.title || "").trim();
+    const incomeGroupingBase = incomeCategory || incomeTitle;
     const label = type === "income"
-      ? normalizeTitle(entry.title)
+      ? normalizeTitle(incomeGroupingBase)
       : normalizeTitle(String(entry.category || entry.title || "Други"));
 
     if (
@@ -110,8 +113,8 @@ function detectRecurringTransactions(transactions, now = new Date()) {
       groups.set(key, {
         key,
         type,
-        title: type === "income" ? String(entry.title || label) : String(entry.category || "Други"),
-        rawTitle: type === "income" ? String(entry.title || label) : String(entry.category || "Други"),
+        title: type === "income" ? String(incomeGroupingBase || label) : String(entry.category || "Други"),
+        rawTitle: type === "income" ? String(incomeGroupingBase || label) : String(entry.category || "Други"),
         category: String(entry.category || "Други"),
         entries: [],
       });

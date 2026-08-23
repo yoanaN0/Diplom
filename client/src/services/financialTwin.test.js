@@ -71,13 +71,48 @@ test("buildFinancialTwinBaseline detects monthly recurring income and expense", 
   const baseline = buildFinancialTwinBaseline(sampleTransactions, new Date("2026-06-30T12:00:00"));
 
   assert.equal(baseline.recurringIncomes.length, 1);
-  assert.equal(baseline.recurringIncomes[0].title, "Заплата");
+  assert.equal(baseline.recurringIncomes[0].title, "Доход");
 
   assert.equal(baseline.recurringExpenses.length, 1);
-  assert.equal(baseline.recurringExpenses[0].title, "Наем");
+  assert.equal(baseline.recurringExpenses[0].title, "Жилище");
 
   assert.equal(baseline.variableExpenses.length, 1);
   assert.equal(baseline.variableExpenses[0].category, "Храна");
+});
+
+test("buildFinancialTwinBaseline groups recurring income by category when titles vary", () => {
+  const variedSalaryTransactions = [
+    {
+      id: "s1",
+      type: "income",
+      title: "Заплата март",
+      amount: 2400,
+      category: "Заплата",
+      date: "2026-03-25T09:00:00",
+    },
+    {
+      id: "s2",
+      type: "income",
+      title: "Заплата април",
+      amount: 2450,
+      category: "Заплата",
+      date: "2026-04-25T09:00:00",
+    },
+    {
+      id: "s3",
+      type: "income",
+      title: "Заплата май",
+      amount: 2500,
+      category: "Заплата",
+      date: "2026-05-25T09:00:00",
+    },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(variedSalaryTransactions, new Date("2026-06-30T12:00:00"));
+
+  assert.equal(baseline.recurringIncomes.length, 1);
+  assert.equal(baseline.recurringIncomes[0].title, "Заплата");
+  assert.equal(baseline.recurringIncomes[0].category, "Заплата");
 });
 
 test("calculateAnnuityPayment returns expected monthly payment", () => {

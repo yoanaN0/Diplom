@@ -56,6 +56,10 @@ function Wallets() {
 		() => cashWallets.reduce((sum, wallet) => sum + wallet.balance, 0),
 		[cashWallets],
 	);
+	const totalBank = useMemo(
+		() => bankConnections.reduce((sum, wallet) => sum + wallet.balance, 0),
+		[bankConnections],
+	);
 
 	const handleAddCashWallet = async (event) => {
 		event.preventDefault();
@@ -176,7 +180,7 @@ function Wallets() {
 		<div className="finance-page wallets-page">
 			<section className="finance-header">
 				<div>
-					<h1>Портфейли и Банкова синхронизация</h1>
+					<h1>Портфейли</h1>
 					<p>Управлявай кеш портфейлите и банковите връзки на едно място.</p>
 				</div>
 			</section>
@@ -232,6 +236,7 @@ function Wallets() {
 					<div className="surface-card__head">
 						<h2>Карти</h2>
 						<div className="surface-card__head-actions">
+							<span className="pill pill--ok">Общо: {formatEur(totalBank)}</span>
 							<button
 								type="button"
 								className="button button--primary"
@@ -255,7 +260,6 @@ function Wallets() {
 
 								<div className="bank-item__meta">
 									<span>{formatEur(bank.balance)}</span>
-									<span className="muted">Дата на последна промяна: {bank.lastSync ? new Date(bank.lastSync).toLocaleDateString("bg-BG") : "—"}</span>
 								</div>
 
 								<div className="bank-item__actions">
