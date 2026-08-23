@@ -73,60 +73,60 @@ function Navbar() {
                       isActive ? "navbar__link navbar__link--active" : "navbar__link"
                     }
                   >
-                  Табло
-                </NavLink>
-              </li>
-              <li>
-                <NavLink
-                  to="/goals"
-                  className={({ isActive }) =>
-                    isActive ? "navbar__link navbar__link--active" : "navbar__link"
-                  }
-                >
-                  Цели
-                </NavLink>
-              </li>
-              <li>
-                <NavLink
-                  to="/transactions"
-                  className={({ isActive }) =>
-                    isActive ? "navbar__link navbar__link--active" : "navbar__link"
-                  }
-                >
-                  Транзакции
-                </NavLink>
-              </li>
-              <li>
-                <NavLink
-                  to="/wallets"
-                  className={({ isActive }) =>
-                    isActive ? "navbar__link navbar__link--active" : "navbar__link"
-                  }
-                >
-                  Портфейли
-                </NavLink>
-              </li>
-              <li>
-                <NavLink
-                  to="/budgets"
-                  className={({ isActive }) =>
-                    isActive ? "navbar__link navbar__link--active" : "navbar__link"
-                  }
-                >
-                  Бюджети
-                </NavLink>
-              </li>
-              <li>
-                <NavLink
-                  to="/financial-twin"
-                  className={({ isActive }) =>
-                    isActive ? "navbar__link navbar__link--active" : "navbar__link"
-                  }
-                >
+                    Табло
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/wallets"
+                    className={({ isActive }) =>
+                      isActive ? "navbar__link navbar__link--active" : "navbar__link"
+                    }
+                  >
+                    Портфейли
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/budgets"
+                    className={({ isActive }) =>
+                      isActive ? "navbar__link navbar__link--active" : "navbar__link"
+                    }
+                  >
+                    Бюджети
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/goals"
+                    className={({ isActive }) =>
+                      isActive ? "navbar__link navbar__link--active" : "navbar__link"
+                    }
+                  >
+                    Цели
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/transactions"
+                    className={({ isActive }) =>
+                      isActive ? "navbar__link navbar__link--active" : "navbar__link"
+                    }
+                  >
+                    Транзакции
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/financial-twin"
+                    className={({ isActive }) =>
+                      isActive ? "navbar__link navbar__link--active" : "navbar__link"
+                    }
+                  >
                     Сценарии
                   </NavLink>
                 </li>
-            </>
+              </>
             )
           ) : (
             <>
