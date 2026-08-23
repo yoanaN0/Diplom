@@ -1,10 +1,12 @@
 import { apiRequest } from "./apiClient.js";
+import { getSessionUser } from "./authStorage.js";
 
 const CHANGED_EVENT = "finly-transactions-changed";
 
 function normalizeTransaction(item) {
   return {
     id: item.id,
+    userId: item.userId ?? null,
     type: item.type,
     title: item.title,
     amount: item.amount,
@@ -33,7 +35,15 @@ function notifyChanged() {
 
 export async function getTransactions() {
   const result = await apiRequest("/transactions.php", { method: "GET" });
-  return sortByDateDesc((result.transactions || []).map(normalizeTransaction));
+  const normalized = (result.transactions || []).map(normalizeTransaction);
+  const sessionUserId = Number(getSessionUser()?.id || 0);
+
+  // Defensive client-side isolation: keep only current-user rows when userId is present.
+  const filtered = sessionUserId > 0
+    ? normalized.filter((item) => item.userId === null || Number(item.userId) === sessionUserId)
+    : normalized;
+
+  return sortByDateDesc(filtered);
 }
 
 export async function createTransaction(payload) {

@@ -16,6 +16,7 @@ function transaction_payload(array $row): array
 {
     return [
         'id' => (int) $row['id'],
+        'userId' => (int) $row['user_id'],
         'type' => $row['type'],
         'title' => $row['title'],
         'amount' => (float) $row['amount'],

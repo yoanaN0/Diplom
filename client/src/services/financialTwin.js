@@ -28,6 +28,30 @@ function average(values) {
   return total / values.length;
 }
 
+function clusterByAmount(entries, tolerancePercent = 15) {
+  const sorted = entries.slice().sort((left, right) => left.amount - right.amount);
+  const clusters = [];
+
+  sorted.forEach((entry) => {
+    const lastCluster = clusters[clusters.length - 1];
+    if (lastCluster) {
+      const refAmount = lastCluster[lastCluster.length - 1].amount;
+      const diffPercent = refAmount > 0
+        ? (Math.abs(entry.amount - refAmount) / refAmount) * 100
+        : 100;
+
+      if (diffPercent <= tolerancePercent) {
+        lastCluster.push(entry);
+        return;
+      }
+    }
+
+    clusters.push([entry]);
+  });
+
+  return clusters;
+}
+
 function normalizeAmount(entry) {
   const raw = Number(entry?.amount);
   if (!Number.isFinite(raw)) {
@@ -91,9 +115,12 @@ function detectRecurringTransactions(transactions, now = new Date()) {
     const incomeCategory = String(entry.category || "").trim();
     const incomeTitle = String(entry.title || "").trim();
     const incomeGroupingBase = incomeCategory || incomeTitle;
+    const expenseTitle = String(entry.title || "").trim();
+    const expenseCategory = String(entry.category || "").trim();
+    const expenseGroupingBase = expenseCategory || expenseTitle;
     const label = type === "income"
       ? normalizeTitle(incomeGroupingBase)
-      : normalizeTitle(String(entry.category || entry.title || "Други"));
+      : normalizeTitle(String(expenseGroupingBase || "Други"));
 
     if (
       isSavingsLikeTransaction(entry) ||
@@ -113,8 +140,8 @@ function detectRecurringTransactions(transactions, now = new Date()) {
       groups.set(key, {
         key,
         type,
-        title: type === "income" ? String(incomeGroupingBase || label) : String(entry.category || "Други"),
-        rawTitle: type === "income" ? String(incomeGroupingBase || label) : String(entry.category || "Други"),
+        title: type === "income" ? String(incomeGroupingBase || label) : String(expenseGroupingBase || "Други"),
+        rawTitle: type === "income" ? String(incomeGroupingBase || label) : String(expenseGroupingBase || "Други"),
         category: String(entry.category || "Други"),
         entries: [],
       });
@@ -126,54 +153,62 @@ function detectRecurringTransactions(transactions, now = new Date()) {
   const recurring = [];
 
   groups.forEach((group) => {
-    const sorted = group.entries
-      .slice()
-      .sort((left, right) => left.date.getTime() - right.date.getTime());
+    const clusters = clusterByAmount(group.entries, 15);
 
-    if (sorted.length < 2) {
-      return;
-    }
+    clusters.forEach((clusterEntries) => {
+      const sorted = clusterEntries
+        .slice()
+        .sort((left, right) => left.date.getTime() - right.date.getTime());
 
-    const lastOccurrence = sorted[sorted.length - 1].date;
+      if (sorted.length < 2) {
+        return;
+      }
 
-    if (daysBetween(lastOccurrence, now) > RECURRING_ACTIVE_DAYS) {
-      return;
-    }
+      const lastOccurrence = sorted[sorted.length - 1].date;
 
-    const intervals = [];
-    for (let index = 1; index < sorted.length; index += 1) {
-      intervals.push(daysBetween(sorted[index - 1].date, sorted[index].date));
-    }
+      if (daysBetween(lastOccurrence, now) > RECURRING_ACTIVE_DAYS) {
+        return;
+      }
 
-    const avgInterval = average(intervals);
-    const monthlyLike = avgInterval >= 15 && avgInterval <= 90;
-    if (!monthlyLike) {
-      return;
-    }
+      const intervals = [];
+      for (let index = 1; index < sorted.length; index += 1) {
+        intervals.push(daysBetween(sorted[index - 1].date, sorted[index].date));
+      }
 
-    const amounts = sorted.map((item) => item.amount);
-    const avgAmount = average(amounts);
-    const amountSpread = Math.max(...amounts) - Math.min(...amounts);
-    const amountSpreadRatio = avgAmount > 0 ? amountSpread / avgAmount : 0;
-    const dayOfMonth = Math.round(average(sorted.map((item) => item.date.getDate())));
+      const avgInterval = average(intervals);
+      const monthlyLike = avgInterval >= 15 && avgInterval <= 90;
+      if (!monthlyLike) {
+        return;
+      }
 
-    const intervalConfidence = Math.max(0, 1 - Math.abs(30 - avgInterval) / 15);
-    const amountConfidence = Math.max(0, 1 - amountSpreadRatio);
-    const occurrenceWeight = Math.min(1, (sorted.length - 1) / 4);
-    const confidence = Number(
-      Math.min(0.99, intervalConfidence * 0.6 + amountConfidence * 0.25 + occurrenceWeight * 0.15)
-        .toFixed(2),
-    );
+      const amounts = sorted.map((item) => item.amount);
+      const avgAmount = average(amounts);
+      const amountSpread = Math.max(...amounts) - Math.min(...amounts);
+      const amountSpreadRatio = avgAmount > 0 ? amountSpread / avgAmount : 0;
+      const dayOfMonth = Math.round(average(sorted.map((item) => item.date.getDate())));
 
-    recurring.push({
-      key: group.key,
-      type: group.type,
-      title: group.rawTitle,
-      category: group.category,
-      amount: Number(avgAmount.toFixed(2)),
-      dayOfMonth,
-      confidence,
-      occurrences: sorted.length,
+      const intervalConfidence = Math.max(0, 1 - Math.abs(30 - avgInterval) / 15);
+      const amountConfidence = Math.max(0, 1 - amountSpreadRatio);
+      const occurrenceWeight = Math.min(1, (sorted.length - 1) / 4);
+      const confidence = Number(
+        Math.min(0.99, intervalConfidence * 0.6 + amountConfidence * 0.25 + occurrenceWeight * 0.15)
+          .toFixed(2),
+      );
+
+      recurring.push({
+        key: group.key,
+        type: group.type,
+        title: group.rawTitle,
+        category: group.category,
+        amount: Number(avgAmount.toFixed(2)),
+        dayOfMonth,
+        confidence,
+        occurrences: sorted.length,
+        matchedEntries: sorted.map((item) => ({
+          date: item.date.toISOString(),
+          amount: item.amount,
+        })),
+      });
     });
   });
 
@@ -184,28 +219,84 @@ function detectRecurringTransactions(transactions, now = new Date()) {
 const HISTORY_MONTHS = 6;
 const RECURRING_ACTIVE_DAYS = 120;
 
-function buildVariableExpensesPerMonth(transactions, recurringExpenseKeys, now = new Date()) {
-  const recurringSet = new Set(recurringExpenseKeys);
+function buildMonthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
 
-  // Използваме последните 6 месеца, включително текущия, за да имаме
-  // по-реалистична средна стойност за категориите.
+function monthsAgo(date, now) {
+  return (now.getFullYear() - date.getFullYear()) * 12 + (now.getMonth() - date.getMonth());
+}
+
+function weightedMedian(pairs) {
+  const sorted = pairs.slice().sort((left, right) => left.value - right.value);
+  const totalWeight = sorted.reduce((sum, pair) => sum + pair.weight, 0);
+
+  if (totalWeight === 0) {
+    return 0;
+  }
+
+  let cumulative = 0;
+  for (const pair of sorted) {
+    cumulative += pair.weight;
+    if (cumulative >= totalWeight / 2) {
+      return pair.value;
+    }
+  }
+
+  return sorted[sorted.length - 1]?.value || 0;
+}
+
+function applyConfidenceToEstimate(estimate, confidence) {
+  // Keep some base contribution even with sparse data, but scale down low-confidence categories.
+  const baseWeight = 0.35;
+  const scaledWeight = baseWeight + (1 - baseWeight) * confidence;
+  return estimate * scaledWeight;
+}
+
+function createRecurringSignature(category, dateValue, amount) {
+  const normalizedCategory = normalizeTitle(String(category || "Други"));
+  const normalizedDate = toDate(dateValue);
+  const normalizedAmount = Number(normalizeAmount({ amount }).toFixed(2));
+
+  if (!normalizedDate || !normalizedCategory || normalizedAmount <= 0) {
+    return null;
+  }
+
+  return `${normalizedCategory}|${normalizedDate.toISOString()}|${normalizedAmount}`;
+}
+
+function buildVariableExpensesPerMonth(transactions, recurringExpenseEntries, now = new Date()) {
+  const recurringTransactionSignatures = new Set();
+  (recurringExpenseEntries || []).forEach((recurringItem) => {
+    (recurringItem?.matchedEntries || []).forEach((entry) => {
+      const signature = createRecurringSignature(
+        recurringItem.category,
+        entry?.date,
+        entry?.amount,
+      );
+
+      if (signature) {
+        recurringTransactionSignatures.add(signature);
+      }
+    });
+  });
+
+  const currentMonthKey = buildMonthKey(now);
+
   const historyStart = new Date(
     now.getFullYear(),
-    now.getMonth() - HISTORY_MONTHS,
+    now.getMonth() - (HISTORY_MONTHS - 1),
     1,
   );
 
-  const sumsByCategory = new Map();
+  const byCategoryMonth = new Map();
   let earliestSeen = null;
 
   transactions.forEach((entry) => {
     if (entry.type !== "expense" || isSavingsLikeTransaction(entry)) return;
 
     const date = toDate(entry.date);
-    if (!date || date < historyStart) return;
-
-    const categoryKey = `expense|${normalizeTitle(String(entry.category || entry.title || "Други"))}`;
-    if (recurringSet.has(categoryKey)) return;
+    if (!date || date < historyStart || date > now) return;
 
     const amount = normalizeAmount(entry);
     if (!Number.isFinite(amount) || amount <= 0) return;
@@ -215,40 +306,64 @@ function buildVariableExpensesPerMonth(transactions, recurringExpenseKeys, now =
     }
 
     const category = String(entry.category || "Други");
-    sumsByCategory.set(category, (sumsByCategory.get(category) || 0) + amount);
+    const signature = createRecurringSignature(category, date, amount);
+    if (signature && recurringTransactionSignatures.has(signature)) {
+      return;
+    }
+
+    const monthKey = buildMonthKey(date);
+
+    if (!byCategoryMonth.has(category)) {
+      byCategoryMonth.set(category, new Map());
+    }
+
+    const monthMap = byCategoryMonth.get(category);
+    monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + amount);
   });
 
   if (!earliestSeen) return [];
 
-  // При нов профил делим само на месеците с възможна история,
-  // не винаги на фиксирани 6.
-  const firstDataMonth = new Date(
-    earliestSeen.getFullYear(),
-    earliestSeen.getMonth(),
-    1,
-  );
+  const results = [];
 
-  const lastMonth = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    1,
-  );
+  byCategoryMonth.forEach((monthMap, category) => {
+    const entriesWithoutCurrent = [...monthMap.entries()].filter(([key]) => key !== currentMonthKey);
+    const usableEntries = entriesWithoutCurrent.length > 0 ? entriesWithoutCurrent : [...monthMap.entries()];
 
-  const monthsSpan = Math.max(
-    1,
-    (lastMonth.getFullYear() - firstDataMonth.getFullYear()) * 12 +
-      (lastMonth.getMonth() - firstDataMonth.getMonth()) +
-      1,
-  );
+    const weighted = usableEntries.map(([monthKey, sum]) => {
+      const [year, month] = monthKey.split("-").map(Number);
+      const monthDate = new Date(year, month - 1, 1);
+      const age = monthsAgo(monthDate, now);
+      const weight = 1 / (1 + age * 0.5);
+      return { value: sum, weight };
+    });
 
-  return [...sumsByCategory.entries()]
-    .map(([category, totalSpent]) => ({
+    const monthsWithData = usableEntries.length;
+    const totalSpentAll = [...monthMap.values()].reduce((sum, value) => sum + value, 0);
+
+    let estimate;
+    if (monthsWithData >= 3) {
+      estimate = weightedMedian(weighted);
+    } else {
+      const totalWeight = weighted.reduce((sum, pair) => sum + pair.weight, 0);
+      estimate = totalWeight > 0
+        ? weighted.reduce((sum, pair) => sum + pair.value * pair.weight, 0) / totalWeight
+        : 0;
+    }
+
+    const confidence = Math.min(1, monthsWithData / HISTORY_MONTHS);
+    const confidenceAdjustedEstimate = applyConfidenceToEstimate(estimate, confidence);
+
+    results.push({
       category,
-      totalSpent: Number(totalSpent.toFixed(2)),
-      monthsOfData: monthsSpan,
-      amount: Number((totalSpent / monthsSpan).toFixed(2)),
-    }))
-    .sort((left, right) => right.amount - left.amount);
+      totalSpent: Number(totalSpentAll.toFixed(2)),
+      monthsOfData: monthsWithData,
+      amount: Number(confidenceAdjustedEstimate.toFixed(2)),
+      baseAmount: Number(estimate.toFixed(2)),
+      confidence: Number(confidence.toFixed(2)),
+    });
+  });
+
+  return results.sort((left, right) => right.amount - left.amount);
 }
 
 export function buildFinancialTwinBaseline(transactions, now = new Date()) {
@@ -256,7 +371,7 @@ export function buildFinancialTwinBaseline(transactions, now = new Date()) {
   const recurringExpenses = recurring.filter((item) => item.type === "expense");
   const variableExpenses = buildVariableExpensesPerMonth(
     transactions,
-    recurringExpenses.map((item) => item.key),
+    recurringExpenses,
     now,
   );
 
@@ -281,40 +396,6 @@ function isRuleActiveForMonth(rule, monthIndex) {
   }
 
   return monthIndex <= endMonth;
-}
-
-function applySpendingCut(variableExpenses, spendingCut, monthIndex = 0) {
-  if (!spendingCut) {
-    return variableExpenses;
-  }
-
-  const percent = Math.max(0, Math.min(100, Number(spendingCut.percent) || 0));
-  const categories = Array.isArray(spendingCut.categories)
-    ? spendingCut.categories
-    : spendingCut.category
-      ? [spendingCut.category]
-      : [];
-
-  const startMonth = Math.max(0, Number(spendingCut.startMonth) || 0);
-  const hasEndMonth = Number.isFinite(Number(spendingCut.endMonth)) && Number(spendingCut.endMonth) >= startMonth;
-  const endMonth = hasEndMonth ? Number(spendingCut.endMonth) : null;
-
-  if (monthIndex < startMonth || (endMonth !== null && monthIndex > endMonth)) {
-    return variableExpenses;
-  }
-
-  if (!categories.length || percent === 0) {
-    return variableExpenses;
-  }
-
-  return variableExpenses.map((item) => {
-    if (!categories.includes(item.category)) {
-      return item;
-    }
-
-    const reduced = item.amount * (1 - percent / 100);
-    return { ...item, amount: Number(reduced.toFixed(2)) };
-  });
 }
 
 function applySpendingCuts(variableExpenses, spendingCuts, monthIndex = 0) {
@@ -361,8 +442,35 @@ export function projectFinancialTwinScenario({
   const recurringExpenses = baseline?.recurringExpenses || [];
 
   const baseVariableExpenses = baseline?.variableExpenses || [];
-  const cutVariableExpenses = applySpendingCut(baseVariableExpenses, modifiers.spendingCut);
-  const cutStartMonth = Math.max(0, Number(modifiers.spendingCut?.startMonth ?? 0));
+  const normalizedSpendingCuts = (() => {
+    if (Array.isArray(modifiers.spendingCuts) && modifiers.spendingCuts.length) {
+      if (modifiers.spendingCut) {
+        console.warn(
+          "Подадени са едновременно 'spendingCut' и 'spendingCuts' — 'spendingCut' се игнорира.",
+        );
+      }
+
+      return modifiers.spendingCuts;
+    }
+
+    if (modifiers.spendingCut) {
+      const cut = modifiers.spendingCut;
+      const categories = Array.isArray(cut.categories)
+        ? cut.categories
+        : cut.category
+          ? [cut.category]
+          : [];
+
+      return categories.map((category) => ({
+        category,
+        percent: cut.percent,
+        startMonth: cut.startMonth,
+        endMonth: cut.endMonth,
+      }));
+    }
+
+    return [];
+  })();
 
   const additionalIncome = Number(modifiers.incomeChange?.amount) || 0;
   const additionalIncomeStart = Math.max(0, Number(modifiers.incomeChange?.startMonth ?? 0));
@@ -384,12 +492,6 @@ export function projectFinancialTwinScenario({
     );
   }
 
-  if (loanPrincipal > 0 && loanStart >= horizon) {
-    console.warn(
-      `Кредит стартира на месец ${loanStart}, но хоризонтът е само ${horizon} месеца — сценарият няма ефект.`,
-    );
-  }
-
   let balance = Number(startBalance) || 0;
   let minimumBalance = balance;
   let firstNegativeMonthIndex = null;
@@ -401,11 +503,9 @@ export function projectFinancialTwinScenario({
 
     const recurringIncomeAmount = recurringIncomes.reduce((sum, item) => sum + item.amount, 0);
     const recurringExpenseAmount = recurringExpenses.reduce((sum, item) => sum + item.amount, 0);
-    const activeVariableExpenses = modifiers.spendingCuts?.length
-      ? applySpendingCuts(baseVariableExpenses, modifiers.spendingCuts, monthIndex)
-      : modifiers.spendingCut && monthIndex >= cutStartMonth
-        ? applySpendingCut(baseVariableExpenses, modifiers.spendingCut, monthIndex)
-        : baseVariableExpenses;
+    const activeVariableExpenses = normalizedSpendingCuts.length
+      ? applySpendingCuts(baseVariableExpenses, normalizedSpendingCuts, monthIndex)
+      : baseVariableExpenses;
     const variableExpenseAmount = activeVariableExpenses.reduce((sum, item) => sum + item.amount, 0);
 
     let monthIncome = recurringIncomeAmount;
