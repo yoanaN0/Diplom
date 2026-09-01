@@ -2173,10 +2173,28 @@ code,
   gap: 4px;
 }
 
+.wallet-item__label,
+.bank-item__label {
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wallet-item__amount,
+.bank-item__amount {
+  margin: 0;
+  color: var(--text-h);
+  font-weight: 700;
+}
+
 .wallet-item__saved,
 .bank-item__saved {
   font-size: 0.76rem;
-  color: var(--muted);
+  color: #0f766e;
+  font-weight: 700;
 }
 
 .wallet-item__actions,

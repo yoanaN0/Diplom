@@ -83,6 +83,14 @@ function Wallets() {
 		() => bankConnections.reduce((sum, wallet) => sum + wallet.balance, 0),
 		[bankConnections],
 	);
+	const totalSavedCash = useMemo(
+		() => cashWallets.reduce((sum, wallet) => sum + Number(savedByWallet[wallet.id] ?? 0), 0),
+		[cashWallets, savedByWallet],
+	);
+	const totalSavedBank = useMemo(
+		() => bankConnections.reduce((sum, wallet) => sum + Number(savedByWallet[wallet.id] ?? 0), 0),
+		[bankConnections, savedByWallet],
+	);
 
 	const handleAddCashWallet = async (event) => {
 		event.preventDefault();
@@ -213,7 +221,8 @@ function Wallets() {
 					<div className="surface-card__head">
 						<h2>Кеш портфейли</h2>
 						<div className="surface-card__head-actions">
-							<span className="pill pill--ok">Общо: {formatEur(totalCash)}</span>
+							<span className="pill pill--ok">Общо налични: {formatEur(totalCash)}</span>
+							<span className="pill pill--ok">Общо спестени: {formatEur(totalSavedCash)}</span>
 							<button
 								type="button"
 								className="button button--primary"
@@ -232,7 +241,9 @@ function Wallets() {
 							<div key={wallet.id} className="wallet-item">
 								<div className="wallet-item__meta">
 									<strong>{wallet.name}</strong>
-									<p>{formatEur(wallet.balance)}</p>
+								<p className="wallet-item__amount">
+									<span className="wallet-item__label">Налично:</span> {formatEur(wallet.balance)}
+									</p>
 									<span className="wallet-item__saved">
 										Спестени: {formatEur(Number(savedByWallet[wallet.id] ?? 0))}
 									</span>
@@ -262,7 +273,8 @@ function Wallets() {
 					<div className="surface-card__head">
 						<h2>Карти</h2>
 						<div className="surface-card__head-actions">
-							<span className="pill pill--ok">Общо: {formatEur(totalBank)}</span>
+							<span className="pill pill--ok">Общо налични: {formatEur(totalBank)}</span>
+							<span className="pill pill--ok">Общо спестени: {formatEur(totalSavedBank)}</span>
 							<button
 								type="button"
 								className="button button--primary"
@@ -285,7 +297,9 @@ function Wallets() {
 								</div>
 
 								<div className="bank-item__meta">
-									<span>{formatEur(bank.balance)}</span>
+									<span className="bank-item__amount">
+										<span className="bank-item__label">Налично:</span> {formatEur(bank.balance)}
+									</span>
 									<span className="bank-item__saved">
 										Спестени: {formatEur(Number(savedByWallet[bank.id] ?? 0))}
 									</span>
