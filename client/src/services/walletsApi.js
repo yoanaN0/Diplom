@@ -1,6 +1,6 @@
 import { apiRequest } from "./apiClient.js";
 
-function normalizeWallet(item) {
+export function normalizeWallet(item) {
   return {
     id: item.id,
     walletType: item.walletType,
@@ -9,7 +9,7 @@ function normalizeWallet(item) {
     bank: item.bank || "",
     account: item.account || "",
     status: item.status || "",
-    lastSync: item.updatedAt || item.lastSync || null,
+    lastSync: item.lastSync ?? null,
     daysToReconnect: item.daysToReconnect ?? null,
     isActive: Boolean(item.isActive),
   };

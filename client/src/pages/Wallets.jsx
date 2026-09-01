@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { formatEur } from "../services/financeData";
-import { getTransactions, transactionsChangedEvent } from "../services/transactionsApi";
+import { buildCsvImportPreview, buildCsvRowDedupeKey, evaluateCsvRowStatus, formatCsvImportSummary } from "../services/csvImport";
+import { getCategories } from "../services/categoriesApi";
+import { createTransaction, getTransactions, transactionsChangedEvent } from "../services/transactionsApi";
 import { createWallet, deleteWallet, getWallets, updateWallet } from "../services/walletsApi";
 
 const getSavedByWallet = (transactions = []) => {
@@ -39,29 +41,44 @@ function Wallets() {
 	const [isCashModalOpen, setIsCashModalOpen] = useState(false);
 	const [isBankModalOpen, setIsBankModalOpen] = useState(false);
 	const [editingWallet, setEditingWallet] = useState(null);
+	const [allTransactions, setAllTransactions] = useState([]);
+	const [categoryOptions, setCategoryOptions] = useState([]);
+	const [importDraft, setImportDraft] = useState({
+		isOpen: false,
+		walletId: null,
+		walletName: "",
+		preview: null,
+	});
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 
+	const loadWallets = async () => {
+		setLoading(true);
+		setError("");
+
+		try {
+			const [items, nextTransactions, nextCategories] = await Promise.all([
+				getWallets(),
+				getTransactions(),
+				getCategories(),
+			]);
+			const nextCashWallets = items.filter((item) => item.walletType === "cash");
+			const nextBankWallets = items.filter((item) => item.walletType === "bank");
+			const nextCategoryOptions = Array.isArray(nextCategories) ? nextCategories : [];
+
+			setAllTransactions(nextTransactions);
+			setCashWallets(nextCashWallets);
+			setBankConnections(nextBankWallets);
+			setSavedByWallet(getSavedByWallet(nextTransactions));
+			setCategoryOptions(nextCategoryOptions);
+		} catch {
+			setError("Неуспешно зареждане на портфейлите.");
+		} finally {
+			setLoading(false);
+		}
+	};
+
 	useEffect(() => {
-		const loadWallets = async () => {
-			setLoading(true);
-			setError("");
-
-			try {
-				const [items, allTransactions] = await Promise.all([getWallets(), getTransactions()]);
-				const nextCashWallets = items.filter((item) => item.walletType === "cash");
-				const nextBankWallets = items.filter((item) => item.walletType === "bank");
-
-				setCashWallets(nextCashWallets);
-				setBankConnections(nextBankWallets);
-				setSavedByWallet(getSavedByWallet(allTransactions));
-			} catch {
-				setError("Неуспешно зареждане на портфейлите.");
-			} finally {
-				setLoading(false);
-			}
-		};
-
 		void loadWallets();
 
 		const handleTransactionsChanged = () => {
@@ -91,6 +108,205 @@ function Wallets() {
 		() => bankConnections.reduce((sum, wallet) => sum + Number(savedByWallet[wallet.id] ?? 0), 0),
 		[bankConnections, savedByWallet],
 	);
+
+	const getNextImportAvailableDate = (wallet) => {
+		if (!wallet?.lastSync) {
+			return null;
+		}
+
+		const lastSyncDate = new Date(wallet.lastSync);
+		if (Number.isNaN(lastSyncDate.getTime())) {
+			return null;
+		}
+
+		const nextAvailable = new Date(lastSyncDate);
+		nextAvailable.setDate(nextAvailable.getDate() + 7);
+		return nextAvailable;
+	};
+
+	const canImportCsvForWallet = (wallet) => {
+		const nextAvailable = getNextImportAvailableDate(wallet);
+		if (!nextAvailable) {
+			return true;
+		}
+
+		return new Date() >= nextAvailable;
+	};
+
+	const getCsvImportButtonText = (wallet) => {
+		const nextAvailable = getNextImportAvailableDate(wallet);
+		if (!nextAvailable || new Date() >= nextAvailable) {
+			return "CSV";
+		}
+
+		return `CSV • ${nextAvailable.toLocaleDateString("bg-BG")}`;
+	};
+
+	const openCsvImport = (walletId, walletName) => {
+		const wallet = bankConnections.find((item) => Number(item.id) === Number(walletId));
+		if (!wallet || wallet.walletType !== "bank") {
+			return;
+		}
+
+		if (!canImportCsvForWallet(wallet)) {
+			const nextAvailable = getNextImportAvailableDate(wallet);
+			if (nextAvailable) {
+				setError(`Следващата актуализация ще е възможна на ${nextAvailable.toLocaleDateString("bg-BG")}.`);
+			}
+			return;
+		}
+
+		setImportDraft({
+			isOpen: true,
+			walletId: Number(walletId),
+			walletName,
+			preview: null,
+		});
+	};
+
+	const closeCsvImport = () => {
+		setImportDraft({
+			isOpen: false,
+			walletId: null,
+			walletName: "",
+			preview: null,
+		});
+	};
+
+	const handleCsvImportFile = async (event) => {
+		const file = event.target.files?.[0];
+		if (!file || !importDraft.walletId) {
+			return;
+		}
+
+		const csvText = await file.text();
+		const preview = buildCsvImportPreview(csvText, {
+			existingTransactions: allTransactions,
+			walletId: importDraft.walletId,
+			now: new Date(),
+		});
+
+		setImportDraft((current) => ({
+			...current,
+			preview,
+		}));
+		event.target.value = "";
+	};
+
+	const getCategoriesForType = (type = "expense") => {
+		const normalizedType = type === "income" ? "income" : "expense";
+
+		return Array.from(
+			new Set(
+				(categoryOptions || [])
+					.filter((category) => {
+						const categoryType = String(category?.categoryType ?? category?.type ?? "").toLowerCase();
+						return !categoryType || categoryType === normalizedType;
+					})
+					.map((category) => category?.category ?? category?.name ?? "")
+					.filter(Boolean),
+			),
+		);
+	};
+
+	const updateImportRow = (rowId, field, value) => {
+		setImportDraft((current) => {
+			if (!current.preview) {
+				return current;
+			}
+
+			const currentSeenHashes = new Set(
+				current.preview.rows
+					.filter((row) => row.id !== rowId)
+					.map((row) => buildCsvRowDedupeKey(row, current.walletId)),
+			);
+
+			const updatedRows = current.preview.rows.map((row) => {
+				if (row.id !== rowId) {
+					return row;
+				}
+
+				const updated = { ...row, [field]: value };
+				if (field === "type") {
+					updated.category = "";
+				}
+				const status = evaluateCsvRowStatus(updated, allTransactions, current.walletId, new Date(), currentSeenHashes);
+				return { ...updated, ...status };
+			});
+
+			return {
+				...current,
+				preview: {
+					...current.preview,
+					rows: updatedRows,
+					validRows: updatedRows.filter((row) => row.status === "valid").length,
+					duplicateRows: updatedRows.filter((row) => row.status === "duplicate").length,
+					invalidRows: updatedRows.filter((row) => row.status === "invalid").length,
+					outsideWindowRows: updatedRows.filter((row) => row.status === "outsideWindow").length,
+				},
+			};
+		});
+	};
+
+	const rowsReadyForCsvImport = importDraft.preview?.rows ?? [];
+	const hasMissingCategoriesForValidRows = rowsReadyForCsvImport
+		.filter((row) => row.status === "valid")
+		.some((row) => !row.category || !String(row.category).trim());
+	const hasDuplicateRowsForCsvImport = rowsReadyForCsvImport.some((row) => row.status === "duplicate");
+
+	const saveCsvImport = async () => {
+		if (!importDraft.preview || !importDraft.walletId) {
+			return;
+		}
+
+		const rowsToSave = importDraft.preview.rows.filter(
+			(row) => row.status !== "duplicate" && row.status !== "invalid" && row.status !== "outsideWindow",
+		);
+
+		if (!rowsToSave.length) {
+			setError("Няма валидни редове за запис.");
+			return;
+		}
+
+		const missingCategoryRows = rowsToSave.filter((row) => !row.category || !String(row.category).trim());
+		if (missingCategoryRows.length) {
+			setError("Моля, изберете категория за всички валидни транзакции преди запис.");
+			return;
+		}
+
+		const duplicateRows = rowsToSave.filter((row) => row.status === "duplicate");
+		if (duplicateRows.length) {
+			setError("Няма да се импортират дублирани транзакции. Премахнете повтарящите се редове или ги коригирайте.");
+			return;
+		}
+
+		try {
+			for (const row of rowsToSave) {
+				await createTransaction({
+					type: row.type || "expense",
+					title: row.description || "CSV транзакция",
+					amount: Math.abs(Number(row.amount || 0)),
+					wallet: importDraft.walletName,
+					walletId: importDraft.walletId,
+					category: row.category || "Общи",
+					note: `CSV импорт • ${row.date || new Date().toISOString().slice(0, 10)}`,
+					tags: ["#csv-import"],
+					receipt: "",
+					date: row.date || new Date().toISOString(),
+				});
+			}
+
+			await updateWallet({
+				id: importDraft.walletId,
+				lastSync: new Date().toISOString(),
+			});
+
+			closeCsvImport();
+			setError("");
+		} catch {
+			setError("Неуспешен импорт на CSV файл.");
+		}
+	};
 
 	const handleAddCashWallet = async (event) => {
 		event.preventDefault();
@@ -133,8 +349,8 @@ function Wallets() {
 				bank: bankDraft.bank.trim(),
 				account: bankDraft.account.trim(),
 				status: "Свързана",
-				lastSync: new Date().toISOString(),
-				daysToReconnect: 90,
+				lastSync: null,
+				daysToReconnect: null,
 				isActive: true,
 			});
 
@@ -306,6 +522,19 @@ function Wallets() {
 								</div>
 
 								<div className="bank-item__actions">
+									<button
+										type="button"
+										className="button button--ghost"
+										disabled={!canImportCsvForWallet(bank)}
+										onClick={() => openCsvImport(bank.id, bank.name)}
+										title={
+											!canImportCsvForWallet(bank)
+												? `Следващата актуализация е на ${getNextImportAvailableDate(bank)?.toLocaleDateString("bg-BG")}`
+												: "Импорт на CSV"
+										}
+									>
+										{getCsvImportButtonText(bank)}
+									</button>
 									<button type="button" className="button button--ghost" onClick={() => openEditWallet(bank, "bank")}>
 										Редактирай
 									</button>
@@ -318,6 +547,123 @@ function Wallets() {
 					</div>
 				</article>
 			</section>
+
+			{importDraft.isOpen ? (
+				<div className="modal-shell" role="dialog" aria-modal="true" aria-label="CSV импорт">
+					<div className="surface-card modal-card">
+						<div className="surface-card__head">
+							<h2>CSV импорт • {importDraft.walletName}</h2>
+						</div>
+
+						<div className="filter-grid">
+							<label>
+								<span>CSV файл</span>
+								<input type="file" accept=".csv,text/csv" onChange={handleCsvImportFile} />
+							</label>
+						</div>
+
+						{importDraft.preview ? (
+							<>
+								<p className="muted">{formatCsvImportSummary(importDraft.preview)}</p>
+								<div className="table-scroll">
+									<table>
+										<thead>
+											<tr>
+												<th>Дата</th>
+												<th>Описание</th>
+												<th>Сума</th>
+												<th>Тип</th>
+												<th>Категория</th>
+												<th>Статус</th>
+											</tr>
+										</thead>
+										<tbody>
+											{importDraft.preview.rows.map((row) => (
+												<tr key={row.id}>
+													<td>
+														<input
+															type="date"
+															value={row.date}
+															onChange={(event) => updateImportRow(row.id, "date", event.target.value)}
+														/>
+													</td>
+													<td>
+														<input
+															type="text"
+															value={row.description}
+															onChange={(event) => updateImportRow(row.id, "description", event.target.value)}
+														/>
+													</td>
+													<td>
+														<input
+															type="number"
+															step="0.01"
+															value={row.amount}
+															onChange={(event) => updateImportRow(row.id, "amount", Number(event.target.value))}
+														/>
+													</td>
+													<td>
+														<select
+															value={row.type}
+															onChange={(event) => updateImportRow(row.id, "type", event.target.value)}
+														>
+															<option value="expense">Разход</option>
+															<option value="income">Приход</option>
+														</select>
+													</td>
+													<td>
+															{(() => {
+																const rowCategories = getCategoriesForType(row.type || "expense");
+																const selectedCategory = row.category && rowCategories.includes(row.category) ? row.category : "";
+
+																return (
+																	<select
+																		value={selectedCategory}
+																		onChange={(event) => updateImportRow(row.id, "category", event.target.value)}
+																	>
+																		<option value="">Избери категория</option>
+																		{Array.from(new Set([...rowCategories, ...(selectedCategory ? [selectedCategory] : [])]))
+																			.filter((category) => category !== "")
+																			.map((category) => (
+																				<option key={category} value={category}>
+																					{category}
+																				</option>
+																			))}
+																	</select>
+																);
+															})()}
+													</td>
+													<td>
+														<span className={`pill ${row.status === "valid" ? "pill--ok" : row.status === "duplicate" ? "pill--warn" : "pill--danger"}`}>
+															{row.status}
+														</span>
+													</td>
+												</tr>
+											))}
+										</tbody>
+									</table>
+								</div>
+							</>
+						) : null}
+
+						{error ? <p className="muted">{error}</p> : null}
+
+						<div className="modal-actions">
+							<button type="button" className="button button--ghost" onClick={closeCsvImport}>
+								Отказ
+							</button>
+							<button
+								type="button"
+								className="button button--primary"
+								onClick={saveCsvImport}
+								disabled={hasMissingCategoriesForValidRows || hasDuplicateRowsForCsvImport}
+							>
+								Запиши транзакциите
+							</button>
+						</div>
+					</div>
+				</div>
+			) : null}
 
 			{isCashModalOpen ? (
 				<div className="modal-shell" role="dialog" aria-modal="true" aria-label="Добавяне на кеш портфейл">

@@ -1410,6 +1410,7 @@ code,
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .surface-card__head h2 {
@@ -2200,8 +2201,9 @@ code,
 .wallet-item__actions,
 .bank-item__actions {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   margin-left: auto;
 }
@@ -2210,6 +2212,54 @@ code,
 .bank-item__actions .button,
 .wallet-item__actions .button {
   white-space: nowrap;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  border: 1px solid rgba(16, 24, 40, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.table-scroll table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+}
+
+.table-scroll th,
+.table-scroll td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(16, 24, 40, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.table-scroll th {
+  background: rgba(15, 118, 110, 0.04);
+  color: var(--text-h);
+  font-weight: 800;
+}
+
+.table-scroll input,
+.table-scroll select {
+  width: 100%;
+  min-width: 120px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(16, 24, 40, 0.12);
+  background: #fff;
+  color: var(--text-h);
+}
+
+.modal-card .filter-grid {
+  grid-template-columns: 1fr;
+}
+
+.modal-card input,
+.modal-card select,
+.modal-card textarea {
+  width: 100%;
 }
 
 .wallet-item p,

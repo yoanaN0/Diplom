@@ -12,18 +12,32 @@ $pdo = api_pdo();
 $userId = api_user_id();
 $data = api_request_data();
 
+function ensure_wallet_sync_columns(PDO $pdo): void
+{
+    $columns = $pdo->query('SHOW COLUMNS FROM wallets')->fetchAll(PDO::FETCH_COLUMN);
+    if (!in_array('sync_status', $columns, true)) {
+        $pdo->exec('ALTER TABLE wallets ADD COLUMN sync_status VARCHAR(32) NULL AFTER account_mask');
+    }
+    if (!in_array('last_sync_at', $columns, true)) {
+        $pdo->exec('ALTER TABLE wallets ADD COLUMN last_sync_at DATETIME NULL AFTER sync_status');
+    }
+    if (!in_array('reconnect_in_days', $columns, true)) {
+        $pdo->exec('ALTER TABLE wallets ADD COLUMN reconnect_in_days INT UNSIGNED NULL AFTER last_sync_at');
+    }
+}
+
 function wallet_payload(array $row): array
 {
-    $updatedAt = $row['updated_at'] ?? $row['last_sync_at'] ?? null;
-    $lastSync = $row['last_sync_at'] ?? $updatedAt ?? null;
+    $updatedAt = $row['updated_at'] ?? null;
+    $lastSync = $row['last_sync_at'] ?? null;
 
     return [
         'id' => (int) $row['id'],
         'walletType' => $row['wallet_type'],
         'name' => $row['name'],
         'balance' => (float) $row['balance'],
-        'bank' => $row['bank_name'],
-        'account' => $row['account_mask'],
+        'bank' => $row['bank_name'] ?? '',
+        'account' => $row['account_mask'] ?? '',
         'status' => $row['sync_status'] ?? null,
         'lastSync' => $lastSync ? str_replace(' ', 'T', (string) $lastSync) : null,
         'daysToReconnect' => $row['reconnect_in_days'] ?? null,
@@ -32,6 +46,8 @@ function wallet_payload(array $row): array
         'updatedAt' => $updatedAt ? str_replace(' ', 'T', (string) $updatedAt) : null,
     ];
 }
+
+ensure_wallet_sync_columns($pdo);
 
 if ($method === 'GET') {
     $id = api_int_or_null($data['id'] ?? null);
@@ -69,11 +85,12 @@ if ($method === 'POST') {
     $balance = api_float_or_null($data['balance'] ?? null) ?? 0.0;
     $bankName = api_text($data['bank'] ?? $data['bank_name'] ?? null, '');
     $accountMask = api_text($data['account'] ?? $data['account_mask'] ?? null, '');
+    $syncStatus = api_text($data['status'] ?? $data['syncStatus'] ?? null, '');
+    $lastSync = api_datetime_or_null($data['lastSync'] ?? $data['last_sync_at'] ?? null);
     $isActive = api_bool($data['isActive'] ?? $data['is_active'] ?? true, true);
-
     $stmt = $pdo->prepare(
-        'INSERT INTO wallets (user_id, wallet_type, name, balance, bank_name, account_mask, is_active)
-         VALUES (:user_id, :wallet_type, :name, :balance, :bank_name, :account_mask, :is_active)'
+        'INSERT INTO wallets (user_id, wallet_type, name, balance, bank_name, account_mask, sync_status, last_sync_at, reconnect_in_days, is_active)
+         VALUES (:user_id, :wallet_type, :name, :balance, :bank_name, :account_mask, :sync_status, :last_sync_at, :reconnect_in_days, :is_active)'
     );
     $stmt->execute([
         'user_id' => $userId,
@@ -82,6 +99,9 @@ if ($method === 'POST') {
         'balance' => number_format($balance, 2, '.', ''),
         'bank_name' => $bankName !== '' ? $bankName : null,
         'account_mask' => $accountMask !== '' ? $accountMask : null,
+        'sync_status' => $syncStatus !== '' ? $syncStatus : null,
+        'last_sync_at' => $lastSync,
+        'reconnect_in_days' => null,
         'is_active' => $isActive ? 1 : 0,
     ]);
 
@@ -114,8 +134,9 @@ if ($method === 'PUT') {
     $balance = api_float_or_null($data['balance'] ?? null);
     $bankName = api_text($data['bank'] ?? $data['bank_name'] ?? null, $existing['bank_name'] ?? '');
     $accountMask = api_text($data['account'] ?? $data['account_mask'] ?? null, $existing['account_mask'] ?? '');
+    $syncStatus = api_text($data['status'] ?? $data['syncStatus'] ?? null, (string) ($existing['sync_status'] ?? ''));
+    $lastSync = api_datetime_or_null($data['lastSync'] ?? $data['last_sync_at'] ?? null) ?? $existing['last_sync_at'] ?? null;
     $isActive = api_bool($data['isActive'] ?? $data['is_active'] ?? null, (bool) ($existing['is_active'] ?? true));
-
     $stmt = $pdo->prepare(
         'UPDATE wallets
          SET wallet_type = :wallet_type,
@@ -123,6 +144,9 @@ if ($method === 'PUT') {
              balance = :balance,
              bank_name = :bank_name,
              account_mask = :account_mask,
+             sync_status = :sync_status,
+             last_sync_at = :last_sync_at,
+             reconnect_in_days = :reconnect_in_days,
              is_active = :is_active
          WHERE id = :id AND user_id = :user_id'
     );
@@ -132,6 +156,9 @@ if ($method === 'PUT') {
         'balance' => number_format($balance ?? (float) ($existing['balance'] ?? 0), 2, '.', ''),
         'bank_name' => $bankName !== '' ? $bankName : null,
         'account_mask' => $accountMask !== '' ? $accountMask : null,
+        'sync_status' => $syncStatus !== '' ? $syncStatus : null,
+        'last_sync_at' => $lastSync,
+        'reconnect_in_days' => $existing['reconnect_in_days'] ?? null,
         'is_active' => $isActive ? 1 : 0,
         'id' => $id,
         'user_id' => $userId,
