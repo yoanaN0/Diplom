@@ -85,6 +85,34 @@ export function getGoalFundingWallets(goal) {
     .sort((left, right) => left.walletId - right.walletId);
 }
 
+export function getWalletSavingsByGoal(goalItems = []) {
+  const totals = {};
+
+  for (const goal of Array.isArray(goalItems) ? goalItems : []) {
+    const status = String(goal?.status ?? '').trim().toLowerCase();
+    if (status === 'completed' || status === 'funded') {
+      continue;
+    }
+
+    for (const funding of Array.isArray(goal?.fundingWallets) ? goal.fundingWallets : []) {
+      const walletId = Number(funding?.walletId ?? funding?.wallet_id ?? 0);
+      const amount = Number(funding?.amount ?? funding?.value ?? 0);
+
+      if (!walletId || !Number.isFinite(amount) || amount <= 0) {
+        continue;
+      }
+
+      totals[walletId] = (totals[walletId] ?? 0) + amount;
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(totals)
+      .map(([walletId, walletAmount]) => [Number(walletId), Number(walletAmount.toFixed(2))])
+      .sort((left, right) => left[0] - right[0])
+  );
+}
+
 export async function getGoals() {
   const result = await apiRequest("/goals.php", { method: "GET" });
   return (result.goals || []).map(normalizeGoal);

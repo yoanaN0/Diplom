@@ -2016,7 +2016,10 @@ code,
   gap: 16px;
 }
 
-.wallets-layout,
+.wallets-layout {
+  grid-template-columns: 1fr;
+}
+
 .budgets-layout {
   grid-template-columns: 1.1fr 0.9fr;
 }
@@ -2162,6 +2165,18 @@ code,
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+}
+
+.wallet-item__meta,
+.bank-item__meta {
+  display: grid;
+  gap: 4px;
+}
+
+.wallet-item__saved,
+.bank-item__saved {
+  font-size: 0.76rem;
+  color: var(--muted);
 }
 
 .wallet-item__actions,

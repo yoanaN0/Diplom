@@ -1,12 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { formatEur } from "../services/financeData";
-import { transactionsChangedEvent } from "../services/transactionsApi";
+import { getTransactions, transactionsChangedEvent } from "../services/transactionsApi";
 import { createWallet, deleteWallet, getWallets, updateWallet } from "../services/walletsApi";
+
+const getSavedByWallet = (transactions = []) => {
+	const totals = {};
+
+	for (const transaction of Array.isArray(transactions) ? transactions : []) {
+		const walletId = Number(transaction?.walletId ?? transaction?.wallet_id ?? 0);
+		const goalId = Number(transaction?.goalId ?? transaction?.goal_id ?? 0);
+		const amount = Number(transaction?.amount ?? 0);
+
+		if (!walletId || !goalId || !Number.isFinite(amount) || amount <= 0) {
+			continue;
+		}
+
+		totals[walletId] = (totals[walletId] ?? 0) + amount;
+	}
+
+	return totals;
+};
 
 function Wallets() {
 	const [cashWallets, setCashWallets] = useState([]);
 	const [bankConnections, setBankConnections] = useState([]);
+	const [savedByWallet, setSavedByWallet] = useState({});
 	const [cashDraft, setCashDraft] = useState({
 		name: "",
 		balance: "",
@@ -29,9 +48,13 @@ function Wallets() {
 			setError("");
 
 			try {
-				const items = await getWallets();
-				setCashWallets(items.filter((item) => item.walletType === "cash"));
-				setBankConnections(items.filter((item) => item.walletType === "bank"));
+				const [items, allTransactions] = await Promise.all([getWallets(), getTransactions()]);
+				const nextCashWallets = items.filter((item) => item.walletType === "cash");
+				const nextBankWallets = items.filter((item) => item.walletType === "bank");
+
+				setCashWallets(nextCashWallets);
+				setBankConnections(nextBankWallets);
+				setSavedByWallet(getSavedByWallet(allTransactions));
 			} catch {
 				setError("Неуспешно зареждане на портфейлите.");
 			} finally {
@@ -207,9 +230,12 @@ function Wallets() {
 					<div className="wallet-list">
 						{cashWallets.map((wallet) => (
 							<div key={wallet.id} className="wallet-item">
-								<div>
+								<div className="wallet-item__meta">
 									<strong>{wallet.name}</strong>
 									<p>{formatEur(wallet.balance)}</p>
+									<span className="wallet-item__saved">
+										Спестени: {formatEur(Number(savedByWallet[wallet.id] ?? 0))}
+									</span>
 								</div>
 								<div className="wallet-item__actions">
 									<button
@@ -260,6 +286,9 @@ function Wallets() {
 
 								<div className="bank-item__meta">
 									<span>{formatEur(bank.balance)}</span>
+									<span className="bank-item__saved">
+										Спестени: {formatEur(Number(savedByWallet[bank.id] ?? 0))}
+									</span>
 								</div>
 
 								<div className="bank-item__actions">
