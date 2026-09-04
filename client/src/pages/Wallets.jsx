@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { formatEur } from "../services/financeData";
-import { buildCsvImportPreview, buildCsvRowDedupeKey, evaluateCsvRowStatus, formatCsvImportSummary } from "../services/csvImport";
+import { buildCsvImportPreview, buildCsvRowDedupeKey, evaluateCsvRowStatus } from "../services/csvImport";
 import { getCategories } from "../services/categoriesApi";
 import { createTransactionDetailed, getTransactions, transactionsChangedEvent } from "../services/transactionsApi";
 import { createWallet, deleteWallet, getWallets, updateWallet } from "../services/walletsApi";
@@ -50,6 +50,7 @@ function Wallets() {
 		preview: null,
 	});
 	const [isImporting, setIsImporting] = useState(false);
+	const [csvImportFileName, setCsvImportFileName] = useState("");
 	const [importSummary, setImportSummary] = useState("");
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
@@ -126,6 +127,7 @@ function Wallets() {
 	};
 
 	const closeCsvImport = () => {
+		setCsvImportFileName("");
 		setImportDraft({
 			isOpen: false,
 			walletId: null,
@@ -134,11 +136,31 @@ function Wallets() {
 		});
 	};
 
+	useEffect(() => {
+		if (!importDraft.isOpen) {
+			return undefined;
+		}
+
+		const handleEscapeClose = (event) => {
+			if (event.key === "Escape") {
+				closeCsvImport();
+			}
+		};
+
+		window.addEventListener("keydown", handleEscapeClose);
+
+		return () => {
+			window.removeEventListener("keydown", handleEscapeClose);
+		};
+	}, [importDraft.isOpen]);
+
 	const handleCsvImportFile = async (event) => {
 		const file = event.target.files?.[0];
 		if (!file || !importDraft.walletId) {
 			return;
 		}
+
+		setCsvImportFileName(file.name || "");
 
 		const csvText = await file.text();
 		const preview = buildCsvImportPreview(csvText, {
@@ -152,6 +174,28 @@ function Wallets() {
 			preview,
 		}));
 		event.target.value = "";
+	};
+
+	const csvStatusLabelMap = {
+		valid: "Валидна",
+		duplicate: "Дубликат",
+		invalid: "Невалидна",
+		outsideWindow: "Извън периода",
+	};
+
+	const getCsvStatusLabel = (status) => csvStatusLabelMap[status] ?? status;
+
+	const getCsvStatusBadgeClass = (status) => {
+		if (status === "valid") {
+			return "csv-import-status-badge--valid";
+		}
+		if (status === "duplicate") {
+			return "csv-import-status-badge--duplicate";
+		}
+		if (status === "outsideWindow") {
+			return "csv-import-status-badge--outside";
+		}
+		return "csv-import-status-badge--invalid";
 	};
 
 	const getCategoriesForType = (type = "expense") => {
@@ -531,69 +575,107 @@ function Wallets() {
 			</section>
 
 			{importDraft.isOpen ? (
-				<div className="modal-shell" role="dialog" aria-modal="true" aria-label="CSV импорт">
-					<div className="surface-card modal-card">
-						<div className="surface-card__head">
-							<h2>CSV импорт • {importDraft.walletName}</h2>
+				<div className="modal-shell csv-import-modal-shell" role="dialog" aria-modal="true" aria-label="CSV импорт">
+					<div className="surface-card modal-card csv-import-modal-card">
+						<div className="csv-import-modal-header">
+							<div>
+								<h2 className="csv-import-title">Импорт от CSV</h2>
+								<p className="csv-import-subtitle">Портфейл: {importDraft.walletName}</p>
+							</div>
+							<button type="button" className="csv-import-close" aria-label="Затвори импорта" onClick={closeCsvImport}>
+								×
+							</button>
 						</div>
 
-						<div className="filter-grid">
-							<label>
-								<span>CSV файл</span>
-								<input type="file" accept=".csv,text/csv" onChange={handleCsvImportFile} />
-							</label>
-						</div>
+						<div className="csv-import-modal-body">
+							<div className="csv-import-file-area">
+								<input
+									id="csv-import-file-input"
+									type="file"
+									className="csv-import-file-input"
+									accept=".csv,text/csv"
+									onChange={handleCsvImportFile}
+								/>
+								<label htmlFor="csv-import-file-input" className="csv-import-file-picker">
+									<span className="csv-import-file-icon" aria-hidden="true">
+										<svg viewBox="0 0 24 24" focusable="false">
+											<path d="M12 3a1 1 0 0 1 1 1v9.59l2.3-2.3a1 1 0 0 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 0 1 1.4-1.42l2.3 2.3V4a1 1 0 0 1 1-1Zm-7 14a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1Z" />
+										</svg>
+									</span>
+									<span className="csv-import-file-content">
+										<span className="button button--ghost csv-import-file-button">Избери CSV файл</span>
+										<span className="csv-import-file-name">{csvImportFileName || "Няма избран файл"}</span>
+										<span className="csv-import-file-help">Поддържан формат: .csv</span>
+									</span>
+								</label>
+							</div>
 
-						{importDraft.preview ? (
-							<>
-								<p className="muted">{formatCsvImportSummary(importDraft.preview)}</p>
-								<div className="table-scroll">
-									<table>
-										<thead>
-											<tr>
-												<th>Дата</th>
-												<th>Описание</th>
-												<th>Сума</th>
-												<th>Тип</th>
-												<th>Категория</th>
-												<th>Статус</th>
-											</tr>
-										</thead>
-										<tbody>
-											{importDraft.preview.rows.map((row) => (
-												<tr key={row.id}>
-													<td>
-														<input
-															type="date"
-															value={row.date}
-															onChange={(event) => updateImportRow(row.id, "date", event.target.value)}
-														/>
-													</td>
-													<td>
-														<input
-															type="text"
-															value={row.description}
-															onChange={(event) => updateImportRow(row.id, "description", event.target.value)}
-														/>
-													</td>
-													<td>
-														<input
-															type="number"
-															step="0.01"
-															value={row.amount}
-															onChange={(event) => updateImportRow(row.id, "amount", Number(event.target.value))}
-														/>
-													</td>
-													<td>
-														<select
-															value={row.type}
-															onChange={(event) => updateImportRow(row.id, "type", event.target.value)}
-														>
-															<option value="expense">Разход</option>
-															<option value="income">Приход</option>
-														</select>
-													</td>
-													<td>
+							{importDraft.preview ? (
+								<>
+									<div className="csv-import-summary-grid">
+										<span className="csv-import-summary-chip csv-import-summary-chip--valid">Валидни: {importDraft.preview.validRows}</span>
+										<span className="csv-import-summary-chip csv-import-summary-chip--duplicate">Дубликати: {importDraft.preview.duplicateRows}</span>
+										<span className="csv-import-summary-chip csv-import-summary-chip--invalid">Невалидни: {importDraft.preview.invalidRows}</span>
+										<span className="csv-import-summary-chip csv-import-summary-chip--outside">Извън периода: {importDraft.preview.outsideWindowRows}</span>
+									</div>
+									<div className="csv-import-table-wrap">
+										<table className="csv-import-table">
+											<thead>
+												<tr>
+													<th className="csv-import-col-date">Дата</th>
+													<th className="csv-import-col-description">Описание</th>
+													<th className="csv-import-col-amount">Сума</th>
+													<th className="csv-import-col-type">Тип</th>
+													<th className="csv-import-col-category">Категория</th>
+													<th className="csv-import-col-status">Статус</th>
+												</tr>
+											</thead>
+											<tbody>
+												{importDraft.preview.rows.map((row) => (
+													<tr
+														key={row.id}
+														className={
+															row.status === "invalid"
+																? "csv-import-row csv-import-row--invalid"
+																: row.status === "duplicate"
+																	? "csv-import-row csv-import-row--duplicate"
+																	: row.status === "outsideWindow"
+																		? "csv-import-row csv-import-row--outside"
+																		: "csv-import-row"
+														}
+													>
+														<td className="csv-import-col-date">
+															<input
+																type="date"
+																value={row.date}
+																onChange={(event) => updateImportRow(row.id, "date", event.target.value)}
+															/>
+														</td>
+														<td className="csv-import-col-description">
+															<input
+																type="text"
+																value={row.description}
+																onChange={(event) => updateImportRow(row.id, "description", event.target.value)}
+															/>
+														</td>
+														<td className="csv-import-col-amount">
+															<input
+																type="number"
+																step="0.01"
+																value={row.amount}
+																onChange={(event) => updateImportRow(row.id, "amount", Number(event.target.value))}
+															/>
+														</td>
+														<td className="csv-import-col-type">
+															<select
+																value={row.type}
+																onChange={(event) => updateImportRow(row.id, "type", event.target.value)}
+															>
+																<option value="expense">Разход</option>
+																<option value="income">Приход</option>
+															</select>
+														</td>
+														<td className="csv-import-col-category">
 															{(() => {
 																const rowCategories = getCategoriesForType(row.type || "expense");
 																const selectedCategory = row.category && rowCategories.includes(row.category) ? row.category : "";
@@ -614,34 +696,39 @@ function Wallets() {
 																	</select>
 																);
 															})()}
-													</td>
-													<td>
-														<span className={`pill ${row.status === "valid" ? "pill--ok" : row.status === "duplicate" ? "pill--warn" : "pill--danger"}`}>
-															{row.status}
-														</span>
-													</td>
-												</tr>
-											))}
-										</tbody>
-									</table>
-								</div>
-							</>
-						) : null}
+														</td>
+														<td className="csv-import-col-status">
+															<span className={`csv-import-status-badge ${getCsvStatusBadgeClass(row.status)}`} title={row.issue || undefined}>
+																{getCsvStatusLabel(row.status)}
+															</span>
+															{row.issue ? <small className="csv-import-status-issue">{row.issue}</small> : null}
+														</td>
+													</tr>
+												))}
+											</tbody>
+										</table>
+									</div>
+								</>
+							) : null}
 
-						{error ? <p className="muted">{error}</p> : null}
+							{error ? <p className="muted csv-import-error">{error}</p> : null}
+						</div>
 
-						<div className="modal-actions">
-							<button type="button" className="button button--ghost" onClick={closeCsvImport}>
-								Отказ
-							</button>
-							<button
-								type="button"
-								className="button button--primary"
-								onClick={saveCsvImport}
-								disabled={isImporting || hasMissingCategoriesForValidRows}
-							>
-								{isImporting ? "Импортиране..." : "Запиши транзакциите"}
-							</button>
+						<div className="csv-import-modal-footer">
+							<p className="csv-import-footer-meta">Готови за запис: {importDraft.preview?.validRows ?? 0}</p>
+							<div className="csv-import-footer-actions">
+								<button type="button" className="button button--ghost" onClick={closeCsvImport}>
+									Отказ
+								</button>
+								<button
+									type="button"
+									className="button button--primary"
+									onClick={saveCsvImport}
+									disabled={isImporting || hasMissingCategoriesForValidRows}
+								>
+									{isImporting ? "Импортиране..." : "Запиши транзакциите"}
+								</button>
+							</div>
 						</div>
 					</div>
 				</div>
