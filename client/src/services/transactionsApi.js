@@ -46,14 +46,28 @@ export async function getTransactions() {
   return sortByDateDesc(filtered);
 }
 
-export async function createTransaction(payload) {
+export async function createTransactionDetailed(payload) {
   const result = await apiRequest("/transactions.php", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 
-  notifyChanged();
-  return sortByDateDesc([normalizeTransaction(result.transaction)]);
+  const normalizedTransaction = result.transaction ? normalizeTransaction(result.transaction) : null;
+
+  if (!result.duplicate && normalizedTransaction) {
+    notifyChanged();
+  }
+
+  return {
+    duplicate: Boolean(result.duplicate),
+    transaction: normalizedTransaction,
+    sourceReference: result.sourceReference ?? null,
+  };
+}
+
+export async function createTransaction(payload) {
+  const result = await createTransactionDetailed(payload);
+  return result.transaction ? sortByDateDesc([result.transaction]) : [];
 }
 
 export async function updateTransaction(id, payload) {

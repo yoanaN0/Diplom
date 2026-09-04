@@ -9,6 +9,7 @@ import About from "./pages/About";
 import Contact from "./pages/Contact";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import VerifyEmail from "./pages/VerifyEmail";
 import Dashboard from "./pages/Dashboard";
 import Goals from "./pages/Goals";
 import Transactions from "./pages/Transactions";
@@ -94,6 +95,14 @@ function App() {
               element={(
                 <GuestRoute>
                   <Register />
+                </GuestRoute>
+              )}
+            />
+            <Route
+              path="/verify-email"
+              element={(
+                <GuestRoute>
+                  <VerifyEmail />
                 </GuestRoute>
               )}
             />

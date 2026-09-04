@@ -42,3 +42,23 @@ In `client`:
 - POST /api/auth/logout.php
 
 Requests and responses are JSON. Session is cookie-based.
+
+## 7) Real email delivery for verification codes
+By default, local WAMP usually cannot send external email via PHP mail().
+
+Use SMTP transport with environment variables (recommended):
+
+- MAIL_TRANSPORT=smtp
+- SMTP_HOST=smtp.gmail.com
+- SMTP_PORT=587
+- SMTP_ENCRYPTION=tls
+- SMTP_USERNAME=your-account@gmail.com
+- SMTP_PASSWORD=your-app-password
+- MAIL_FROM_ADDRESS=your-account@gmail.com
+- MAIL_FROM_NAME=Finly
+
+Notes:
+- For Gmail, use an App Password (not your normal account password).
+- Restart Apache after updating environment variables.
+- If SMTP is not configured or fails, verification codes are written to:
+	api/tmp/email_verification_outbox.log

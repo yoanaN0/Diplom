@@ -6,6 +6,7 @@ require __DIR__ . '/../bootstrap.php';
 require __DIR__ . '/../lib/response.php';
 require __DIR__ . '/../lib/db.php';
 require __DIR__ . '/../lib/admin_helpers.php';
+require __DIR__ . '/../lib/email_verification.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     json_response(405, ['ok' => false, 'error' => 'Method not allowed']);
@@ -22,6 +23,7 @@ if ($email === '' || $password === '') {
 $config = require __DIR__ . '/../config.php';
 $pdo = db_connection($config);
 admin_install_schema($pdo);
+email_verification_install_schema($pdo);
 
 $stmt = $pdo->prepare(
     'SELECT u.id, u.first_name, u.last_name, u.email, u.password_hash, m.role, m.profile_status, m.is_verified, m.last_login_at
@@ -45,6 +47,37 @@ $profileStatus = $meta['profileStatus'] ?? 'active';
 if (in_array($profileStatus, ['blocked', 'deleted'], true)) {
     admin_track_login($pdo, (int) $user['id'], $email, false);
     json_response(403, ['ok' => false, 'error' => 'Профилът е ограничен. Свържи се с администратор.']);
+}
+
+if (!($meta['isVerified'] ?? false)) {
+    $issueResult = email_verification_issue_code($pdo, (int) $user['id'], $email);
+    admin_track_login($pdo, (int) $user['id'], $email, false);
+
+    $errorMessage = 'Профилът не е потвърден. Въведи кода от имейла.';
+    if (!($issueResult['ok'] ?? false) && ($issueResult['reason'] ?? '') === 'sendFailed') {
+        $errorMessage = 'Профилът не е потвърден. Кодът не можа да бъде изпратен сега. Опитай отново след няколко минути.';
+    }
+
+    if (!($issueResult['ok'] ?? false) && ($issueResult['reason'] ?? '') === 'hourlyLimit') {
+        $errorMessage = 'Профилът не е потвърден. Достигнат е максималният брой изпращания. Опитай отново по-късно.';
+    }
+
+    $payload = [
+        'ok' => false,
+        'error' => $errorMessage,
+        'requiresVerification' => true,
+        'email' => $email,
+    ];
+
+    if (isset($issueResult['retryAfterSeconds'])) {
+        $payload['retryAfterSeconds'] = (int) $issueResult['retryAfterSeconds'];
+    }
+
+    if (isset($issueResult['cooldownRemaining'])) {
+        $payload['cooldownRemaining'] = (int) $issueResult['cooldownRemaining'];
+    }
+
+    json_response(403, $payload);
 }
 
 $_SESSION['user_id'] = (int) $user['id'];

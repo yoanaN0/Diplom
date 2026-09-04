@@ -23,6 +23,11 @@ function Login() {
 
     const result = await loginUser(payload);
     if (!result.ok) {
+      if (result.requiresVerification) {
+        navigate("/verify-email", { state: { email: result.email || payload.email } });
+        return;
+      }
+
       if (messageNode) {
         messageNode.textContent = result.error;
         messageNode.className = "auth-card__feedback auth-card__feedback--error";

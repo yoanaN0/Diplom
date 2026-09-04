@@ -175,6 +175,99 @@ function transaction_wallet_delta(string $type, float $amount): float
     return 0.0;
 }
 
+function lower_text(string $value): string
+{
+    if (function_exists('mb_strtolower')) {
+        return mb_strtolower($value, 'UTF-8');
+    }
+
+    return strtolower($value);
+}
+
+function normalize_text_for_source_reference(string $value): string
+{
+    $withoutHtml = strip_tags($value);
+    $collapsed = preg_replace('/\s+/u', ' ', $withoutHtml);
+    if (!is_string($collapsed)) {
+        return '';
+    }
+
+    return trim(lower_text($collapsed));
+}
+
+function normalize_source_reference_value(mixed $value): ?string
+{
+    $text = trim((string) ($value ?? ''));
+    return $text === '' ? null : $text;
+}
+
+function normalize_csv_type_for_source_reference(string $type, float $amount): string
+{
+    $normalized = lower_text(trim($type));
+    if ($normalized === 'income' || $normalized === 'expense') {
+        return $normalized;
+    }
+
+    return $amount < 0 ? 'expense' : 'income';
+}
+
+function is_csv_source_type(array $data): bool
+{
+    $sourceType = lower_text(api_text($data['sourceType'] ?? $data['source_type'] ?? null, ''));
+    return $sourceType === 'csv';
+}
+
+function is_csv_date_within_allowed_window(string $transactionDate): bool
+{
+    try {
+        $transactionDay = new DateTimeImmutable((new DateTimeImmutable($transactionDate))->format('Y-m-d'));
+    } catch (Throwable) {
+        return false;
+    }
+
+    $today = new DateTimeImmutable('today');
+    $start = $today->modify('-6 days');
+
+    return $transactionDay >= $start && $transactionDay <= $today;
+}
+
+function build_csv_source_reference(?int $walletId, string $transactionDate, string $type, float $amount, string $title, string $externalReference): string
+{
+    $normalizedExternalReference = normalize_text_for_source_reference($externalReference);
+    if ($normalizedExternalReference !== '') {
+        return hash('sha256', 'csv-ref|' . $normalizedExternalReference);
+    }
+
+    $normalizedType = normalize_csv_type_for_source_reference($type, $amount);
+    $normalizedTitle = normalize_text_for_source_reference($title);
+    $normalizedAmount = number_format(abs($amount), 2, '.', '');
+    $normalizedDate = (new DateTimeImmutable($transactionDate))->format('Y-m-d');
+
+    return hash(
+        'sha256',
+        'csv-fallback|'
+        . (string) ($walletId ?? 0)
+        . '|'
+        . $normalizedDate
+        . '|'
+        . $normalizedType
+        . '|'
+        . $normalizedAmount
+        . '|'
+        . $normalizedTitle
+    );
+}
+
+function is_duplicate_source_reference_exception(PDOException $exception): bool
+{
+    if ($exception->getCode() !== '23000') {
+        return false;
+    }
+
+    return str_contains($exception->getMessage(), 'uniq_transactions_user_wallet_source_reference')
+        || str_contains($exception->getMessage(), 'Duplicate entry');
+}
+
 function adjust_wallet_balance(PDO $pdo, int $userId, ?int $walletId, float $delta): void
 {
     if ($walletId === null) {
@@ -402,6 +495,21 @@ if ($method === 'POST') {
     $wallet = resolve_wallet($pdo, $userId, $data);
     $category = resolve_category($pdo, $userId, $data);
 
+    $transactionDate = api_datetime_or_null($data['date'] ?? $data['transaction_date'] ?? null) ?? api_now();
+    $isCsvImport = is_csv_source_type($data);
+    $externalReference = api_text($data['externalReference'] ?? $data['external_reference'] ?? null, '');
+
+    if ($isCsvImport && !is_csv_date_within_allowed_window($transactionDate)) {
+        json_response(422, ['ok' => false, 'error' => 'CSV импортът приема транзакции само от последните 7 календарни дни.']);
+    }
+
+    $sourceReference = null;
+    if ($isCsvImport) {
+        $sourceReference = build_csv_source_reference($wallet['id'], $transactionDate, $type, (float) $amount, $title, $externalReference);
+    } else {
+        $sourceReference = normalize_source_reference_value($data['sourceReference'] ?? $data['source_reference'] ?? $data['receipt'] ?? null);
+    }
+
     $stmt = $pdo->prepare(
         'INSERT INTO transactions (
             user_id, wallet_id, category_id, goal_id, source_goal_id, type, title, amount, currency,
@@ -411,24 +519,36 @@ if ($method === 'POST') {
             :wallet_label, :category_label, :note, :tags_text, :receipt_raw_text, :transaction_date, :source_reference
          )'
     );
-    $stmt->execute([
-        'user_id' => $userId,
-        'wallet_id' => $wallet['id'],
-        'category_id' => $category['id'],
-        'goal_id' => api_int_or_null($data['goalId'] ?? $data['goal_id'] ?? null),
-        'source_goal_id' => api_int_or_null($data['sourceGoalId'] ?? $data['source_goal_id'] ?? null),
-        'type' => $type,
-        'title' => $title,
-        'amount' => number_format($amount, 2, '.', ''),
-        'currency' => api_text($data['currency'] ?? null, 'EUR'),
-        'wallet_label' => $wallet['label'],
-        'category_label' => $category['label'],
-        'note' => api_text($data['note'] ?? null, ''),
-        'tags_text' => api_tags_to_text($data['tags'] ?? $data['tags_text'] ?? null),
-        'receipt_raw_text' => api_text($data['receiptRawText'] ?? $data['receipt_raw_text'] ?? null, ''),
-        'transaction_date' => api_datetime_or_null($data['date'] ?? $data['transaction_date'] ?? null) ?? api_now(),
-        'source_reference' => api_text($data['receipt'] ?? $data['source_reference'] ?? null, ''),
-    ]);
+    try {
+        $stmt->execute([
+            'user_id' => $userId,
+            'wallet_id' => $wallet['id'],
+            'category_id' => $category['id'],
+            'goal_id' => api_int_or_null($data['goalId'] ?? $data['goal_id'] ?? null),
+            'source_goal_id' => api_int_or_null($data['sourceGoalId'] ?? $data['source_goal_id'] ?? null),
+            'type' => $type,
+            'title' => $title,
+            'amount' => number_format($amount, 2, '.', ''),
+            'currency' => api_text($data['currency'] ?? null, 'EUR'),
+            'wallet_label' => $wallet['label'],
+            'category_label' => $category['label'],
+            'note' => api_text($data['note'] ?? null, ''),
+            'tags_text' => api_tags_to_text($data['tags'] ?? $data['tags_text'] ?? null),
+            'receipt_raw_text' => api_text($data['receiptRawText'] ?? $data['receipt_raw_text'] ?? null, ''),
+            'transaction_date' => $transactionDate,
+            'source_reference' => $sourceReference,
+        ]);
+    } catch (PDOException $exception) {
+        if ($isCsvImport && is_duplicate_source_reference_exception($exception)) {
+            json_response(200, [
+                'ok' => true,
+                'duplicate' => true,
+                'sourceReference' => $sourceReference,
+            ]);
+        }
+
+        throw $exception;
+    }
 
     $id = (int) $pdo->lastInsertId();
     if (is_goal_funding_transfer($data, $type, $category['label'], $title)) {
@@ -502,6 +622,19 @@ if ($method === 'PUT') {
              source_reference = :source_reference
          WHERE id = :id AND user_id = :user_id'
     );
+    $shouldUpdateSourceReference = array_key_exists('sourceReference', $data)
+        || array_key_exists('source_reference', $data)
+        || array_key_exists('receipt', $data);
+    $nextSourceReference = $shouldUpdateSourceReference
+        ? normalize_source_reference_value($data['sourceReference'] ?? $data['source_reference'] ?? $data['receipt'] ?? null)
+        : normalize_source_reference_value($existing['source_reference'] ?? null);
+
+    $nextTransactionDate = api_datetime_or_null($data['date'] ?? $data['transaction_date'] ?? null) ?? $existing['transaction_date'];
+
+    if (is_csv_source_type($data) && !is_csv_date_within_allowed_window($nextTransactionDate)) {
+        json_response(422, ['ok' => false, 'error' => 'CSV импортът приема транзакции само от последните 7 календарни дни.']);
+    }
+
     $stmt->execute([
         'wallet_id' => $wallet['id'],
         'category_id' => $category['id'],
@@ -516,8 +649,8 @@ if ($method === 'PUT') {
         'note' => api_text($data['note'] ?? null, $existing['note'] ?? ''),
         'tags_text' => api_tags_to_text($data['tags'] ?? $data['tags_text'] ?? null) ?? $existing['tags_text'],
         'receipt_raw_text' => api_text($data['receiptRawText'] ?? $data['receipt_raw_text'] ?? null, $existing['receipt_raw_text'] ?? ''),
-        'transaction_date' => api_datetime_or_null($data['date'] ?? $data['transaction_date'] ?? null) ?? $existing['transaction_date'],
-        'source_reference' => api_text($data['receipt'] ?? $data['source_reference'] ?? null, $existing['source_reference'] ?? ''),
+        'transaction_date' => $nextTransactionDate,
+        'source_reference' => $nextSourceReference,
         'id' => $id,
         'user_id' => $userId,
     ]);

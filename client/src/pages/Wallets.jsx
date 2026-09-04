@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatEur } from "../services/financeData";
 import { buildCsvImportPreview, buildCsvRowDedupeKey, evaluateCsvRowStatus, formatCsvImportSummary } from "../services/csvImport";
 import { getCategories } from "../services/categoriesApi";
-import { createTransaction, getTransactions, transactionsChangedEvent } from "../services/transactionsApi";
+import { createTransactionDetailed, getTransactions, transactionsChangedEvent } from "../services/transactionsApi";
 import { createWallet, deleteWallet, getWallets, updateWallet } from "../services/walletsApi";
 
 const getSavedByWallet = (transactions = []) => {
@@ -49,6 +49,8 @@ function Wallets() {
 		walletName: "",
 		preview: null,
 	});
+	const [isImporting, setIsImporting] = useState(false);
+	const [importSummary, setImportSummary] = useState("");
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState("");
 
@@ -109,50 +111,9 @@ function Wallets() {
 		[bankConnections, savedByWallet],
 	);
 
-	const getNextImportAvailableDate = (wallet) => {
-		if (!wallet?.lastSync) {
-			return null;
-		}
-
-		const lastSyncDate = new Date(wallet.lastSync);
-		if (Number.isNaN(lastSyncDate.getTime())) {
-			return null;
-		}
-
-		const nextAvailable = new Date(lastSyncDate);
-		nextAvailable.setDate(nextAvailable.getDate() + 7);
-		return nextAvailable;
-	};
-
-	const canImportCsvForWallet = (wallet) => {
-		const nextAvailable = getNextImportAvailableDate(wallet);
-		if (!nextAvailable) {
-			return true;
-		}
-
-		return new Date() >= nextAvailable;
-	};
-
-	const getCsvImportButtonText = (wallet) => {
-		const nextAvailable = getNextImportAvailableDate(wallet);
-		if (!nextAvailable || new Date() >= nextAvailable) {
-			return "CSV";
-		}
-
-		return `CSV • ${nextAvailable.toLocaleDateString("bg-BG")}`;
-	};
-
 	const openCsvImport = (walletId, walletName) => {
 		const wallet = bankConnections.find((item) => Number(item.id) === Number(walletId));
 		if (!wallet || wallet.walletType !== "bank") {
-			return;
-		}
-
-		if (!canImportCsvForWallet(wallet)) {
-			const nextAvailable = getNextImportAvailableDate(wallet);
-			if (nextAvailable) {
-				setError(`Следващата актуализация ще е възможна на ${nextAvailable.toLocaleDateString("bg-BG")}.`);
-			}
 			return;
 		}
 
@@ -252,16 +213,13 @@ function Wallets() {
 	const hasMissingCategoriesForValidRows = rowsReadyForCsvImport
 		.filter((row) => row.status === "valid")
 		.some((row) => !row.category || !String(row.category).trim());
-	const hasDuplicateRowsForCsvImport = rowsReadyForCsvImport.some((row) => row.status === "duplicate");
 
 	const saveCsvImport = async () => {
-		if (!importDraft.preview || !importDraft.walletId) {
+		if (!importDraft.preview || !importDraft.walletId || isImporting) {
 			return;
 		}
 
-		const rowsToSave = importDraft.preview.rows.filter(
-			(row) => row.status !== "duplicate" && row.status !== "invalid" && row.status !== "outsideWindow",
-		);
+		const rowsToSave = importDraft.preview.rows.filter((row) => row.status === "valid");
 
 		if (!rowsToSave.length) {
 			setError("Няма валидни редове за запис.");
@@ -274,15 +232,18 @@ function Wallets() {
 			return;
 		}
 
-		const duplicateRows = rowsToSave.filter((row) => row.status === "duplicate");
-		if (duplicateRows.length) {
-			setError("Няма да се импортират дублирани транзакции. Премахнете повтарящите се редове или ги коригирайте.");
-			return;
-		}
+		setIsImporting(true);
+		setError("");
+		setImportSummary("");
+
+		let insertedCount = 0;
+		let skippedServerDuplicates = 0;
+		let failedCount = 0;
 
 		try {
 			for (const row of rowsToSave) {
-				await createTransaction({
+				try {
+					const result = await createTransactionDetailed({
 					type: row.type || "expense",
 					title: row.description || "CSV транзакция",
 					amount: Math.abs(Number(row.amount || 0)),
@@ -291,20 +252,45 @@ function Wallets() {
 					category: row.category || "Общи",
 					note: `CSV импорт • ${row.date || new Date().toISOString().slice(0, 10)}`,
 					tags: ["#csv-import"],
-					receipt: "",
+					sourceType: "csv",
+					externalReference: row.externalReference || "",
 					date: row.date || new Date().toISOString(),
-				});
+					});
+
+					if (result?.duplicate) {
+						skippedServerDuplicates += 1;
+					} else if (result?.transaction) {
+						insertedCount += 1;
+					}
+				} catch {
+					failedCount += 1;
+				}
 			}
 
-			await updateWallet({
-				id: importDraft.walletId,
-				lastSync: new Date().toISOString(),
-			});
+			const summary = `Добавени: ${insertedCount} · Пропуснати дубликати: ${importDraft.preview.duplicateRows + skippedServerDuplicates} · Невалидни: ${importDraft.preview.invalidRows} · Извън периода: ${importDraft.preview.outsideWindowRows}`;
+			setImportSummary(summary);
+
+			let syncFailed = false;
+			try {
+				await updateWallet({
+					id: importDraft.walletId,
+					lastSync: new Date().toISOString(),
+				});
+				await loadWallets();
+			} catch {
+				syncFailed = true;
+			}
 
 			closeCsvImport();
-			setError("");
+			if (failedCount > 0) {
+				setError(`Импортът приключи частично. Незаписани редове заради грешка: ${failedCount}.`);
+			} else if (syncFailed) {
+				setError("Транзакциите са записани, но опресняването на данните не бе успешно.");
+			}
 		} catch {
 			setError("Неуспешен импорт на CSV файл.");
+		} finally {
+			setIsImporting(false);
 		}
 	};
 
@@ -451,6 +437,7 @@ function Wallets() {
 
 					{loading ? <p className="muted">Зареждане на портфейли...</p> : null}
 					{error ? <p className="muted">{error}</p> : null}
+					{importSummary ? <p className="muted">{importSummary}</p> : null}
 
 					<div className="wallet-list">
 						{cashWallets.map((wallet) => (
@@ -525,15 +512,10 @@ function Wallets() {
 									<button
 										type="button"
 										className="button button--ghost"
-										disabled={!canImportCsvForWallet(bank)}
 										onClick={() => openCsvImport(bank.id, bank.name)}
-										title={
-											!canImportCsvForWallet(bank)
-												? `Следващата актуализация е на ${getNextImportAvailableDate(bank)?.toLocaleDateString("bg-BG")}`
-												: "Импорт на CSV"
-										}
+										title="Импорт на CSV"
 									>
-										{getCsvImportButtonText(bank)}
+										CSV
 									</button>
 									<button type="button" className="button button--ghost" onClick={() => openEditWallet(bank, "bank")}>
 										Редактирай
@@ -656,9 +638,9 @@ function Wallets() {
 								type="button"
 								className="button button--primary"
 								onClick={saveCsvImport}
-								disabled={hasMissingCategoriesForValidRows || hasDuplicateRowsForCsvImport}
+								disabled={isImporting || hasMissingCategoriesForValidRows}
 							>
-								Запиши транзакциите
+								{isImporting ? "Импортиране..." : "Запиши транзакциите"}
 							</button>
 						</div>
 					</div>

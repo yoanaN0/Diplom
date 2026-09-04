@@ -12,20 +12,6 @@ $pdo = api_pdo();
 $userId = api_user_id();
 $data = api_request_data();
 
-function ensure_wallet_sync_columns(PDO $pdo): void
-{
-    $columns = $pdo->query('SHOW COLUMNS FROM wallets')->fetchAll(PDO::FETCH_COLUMN);
-    if (!in_array('sync_status', $columns, true)) {
-        $pdo->exec('ALTER TABLE wallets ADD COLUMN sync_status VARCHAR(32) NULL AFTER account_mask');
-    }
-    if (!in_array('last_sync_at', $columns, true)) {
-        $pdo->exec('ALTER TABLE wallets ADD COLUMN last_sync_at DATETIME NULL AFTER sync_status');
-    }
-    if (!in_array('reconnect_in_days', $columns, true)) {
-        $pdo->exec('ALTER TABLE wallets ADD COLUMN reconnect_in_days INT UNSIGNED NULL AFTER last_sync_at');
-    }
-}
-
 function wallet_payload(array $row): array
 {
     $updatedAt = $row['updated_at'] ?? null;
@@ -46,8 +32,6 @@ function wallet_payload(array $row): array
         'updatedAt' => $updatedAt ? str_replace(' ', 'T', (string) $updatedAt) : null,
     ];
 }
-
-ensure_wallet_sync_columns($pdo);
 
 if ($method === 'GET') {
     $id = api_int_or_null($data['id'] ?? null);

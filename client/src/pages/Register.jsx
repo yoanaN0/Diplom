@@ -51,6 +51,17 @@ function Register() {
 
     const result = await registerUser(payload);
     if (!result.ok) {
+      if (result.requiresVerification) {
+        navigate("/verify-email", {
+          state: {
+            email: result.email || payload.email,
+            initialError: result.error || "Кодът не можа да бъде изпратен. Можеш да опиташ отново.",
+            emailDeliveryFailed: Boolean(result.emailDeliveryFailed),
+          },
+        });
+        return;
+      }
+
       if (messageNode) {
         messageNode.textContent = result.error;
         messageNode.className = "auth-card__feedback auth-card__feedback--error";
@@ -59,11 +70,11 @@ function Register() {
     }
 
     if (messageNode) {
-      messageNode.textContent = "Профилът е създаден успешно. Пренасочване...";
+      messageNode.textContent = "Пратихме код за потвърждение. Пренасочване...";
       messageNode.className = "auth-card__feedback auth-card__feedback--success";
     }
 
-    navigate("/dashboard");
+    navigate("/verify-email", { state: { email: result.email || payload.email } });
   };
 
   return (

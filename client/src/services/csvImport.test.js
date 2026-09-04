@@ -100,3 +100,105 @@ test("duplicate detection rejects the same edit against the current preview batc
 
   assert.equal(status.status, "duplicate");
 });
+
+test("marks a row as duplicate when it already exists in stored transactions", () => {
+  const status = evaluateCsvRowStatus(
+    { date: "2026-08-07", description: "Supermarket", amount: -12.5, type: "expense" },
+    [{ walletId: 42, date: "2026-08-07", title: "Supermarket", amount: 12.5, type: "expense" }],
+    42,
+    new Date("2026-08-10T12:00:00"),
+  );
+
+  assert.equal(status.status, "duplicate");
+});
+
+test("same transaction data in a different wallet is not a duplicate", () => {
+  const status = evaluateCsvRowStatus(
+    { date: "2026-08-07", description: "Supermarket", amount: -12.5, type: "expense" },
+    [{ walletId: 10, date: "2026-08-07", title: "Supermarket", amount: 12.5, type: "expense" }],
+    42,
+    new Date("2026-08-10T12:00:00"),
+  );
+
+  assert.equal(status.status, "valid");
+});
+
+test("expense in CSV as -12.50 matches stored expense 12.50", () => {
+  const csvKey = buildCsvRowDedupeKey({
+    date: "2026-08-07",
+    description: "Store",
+    amount: -12.5,
+    type: "expense",
+  }, 42);
+
+  const storedKey = buildCsvRowDedupeKey({
+    date: "2026-08-07",
+    description: "Store",
+    amount: 12.5,
+    type: "expense",
+  }, 42);
+
+  assert.equal(csvKey, storedKey);
+});
+
+test("description normalization ignores case, HTML and extra spaces", () => {
+  const csvKey = buildCsvRowDedupeKey({
+    date: "2026-08-07",
+    description: "  Store   Purchase <br/>  ",
+    amount: -12.5,
+    type: "expense",
+  }, 42);
+
+  const storedKey = buildCsvRowDedupeKey({
+    date: "2026-08-07",
+    description: "store purchase",
+    amount: 12.5,
+    type: "expense",
+  }, 42);
+
+  assert.equal(csvKey, storedKey);
+});
+
+test("today transaction is inside the allowed 7-day window", () => {
+  const status = evaluateCsvRowStatus(
+    { date: "2026-09-10", description: "Today", amount: 10, type: "income" },
+    [],
+    42,
+    new Date("2026-09-10T12:00:00"),
+  );
+
+  assert.equal(status.status, "valid");
+});
+
+test("transaction from the previous sixth day is still valid", () => {
+  const status = evaluateCsvRowStatus(
+    { date: "2026-09-04", description: "Day minus six", amount: 10, type: "income" },
+    [],
+    42,
+    new Date("2026-09-10T12:00:00"),
+  );
+
+  assert.equal(status.status, "valid");
+});
+
+test("transaction from the previous seventh day is outside the allowed window", () => {
+  const status = evaluateCsvRowStatus(
+    { date: "2026-09-03", description: "Day minus seven", amount: 10, type: "income" },
+    [],
+    42,
+    new Date("2026-09-10T12:00:00"),
+  );
+
+  assert.equal(status.status, "outsideWindow");
+});
+
+test("future transaction is outside the allowed window", () => {
+  const status = evaluateCsvRowStatus(
+    { date: "2026-09-11", description: "Future", amount: 10, type: "income" },
+    [],
+    42,
+    new Date("2026-09-10T12:00:00"),
+  );
+
+  assert.equal(status.status, "outsideWindow");
+});

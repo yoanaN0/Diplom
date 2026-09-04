@@ -57,6 +57,21 @@ CREATE TABLE IF NOT EXISTS user_login_logs (
         ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS user_email_verification_codes (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id INT UNSIGNED NOT NULL,
+    code_hash VARCHAR(255) NOT NULL,
+    attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_user_email_verification_codes_user_created (user_id, created_at),
+    CONSTRAINT fk_user_email_verification_codes_user
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS wallets (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT,
     user_id INT UNSIGNED NOT NULL,
@@ -165,6 +180,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     KEY idx_transactions_category (category_id),
     KEY idx_transactions_goal (goal_id),
     KEY idx_transactions_source_goal (source_goal_id),
+    UNIQUE KEY uniq_transactions_user_wallet_source_reference (user_id, wallet_id, source_reference),
     CONSTRAINT fk_transactions_user
         FOREIGN KEY (user_id) REFERENCES users (id)
         ON DELETE CASCADE,

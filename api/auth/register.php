@@ -6,6 +6,7 @@ require __DIR__ . '/../bootstrap.php';
 require __DIR__ . '/../lib/response.php';
 require __DIR__ . '/../lib/db.php';
 require __DIR__ . '/../lib/admin_helpers.php';
+require __DIR__ . '/../lib/email_verification.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
     json_response(405, ['ok' => false, 'error' => 'Method not allowed']);
@@ -32,6 +33,7 @@ if (mb_strlen($password) < 8) {
 $config = require __DIR__ . '/../config.php';
 $pdo = db_connection($config);
 admin_install_schema($pdo);
+email_verification_install_schema($pdo);
 
 $checkStmt = $pdo->prepare('SELECT id FROM users WHERE email = :email LIMIT 1');
 $checkStmt->execute(['email' => $email]);
@@ -60,27 +62,48 @@ $profileStmt->execute([
     'country' => 'България',
 ]);
 
-$_SESSION['user_id'] = $userId;
 admin_ensure_user_meta($pdo, $userId);
-$meta = admin_get_user_meta($pdo, $userId) ?? [
-    'role' => 'user',
-    'profileStatus' => 'active',
-    'isVerified' => false,
-    'lastLoginAt' => null,
-];
-admin_track_login($pdo, $userId, $email, true);
+
+$verificationResult = email_verification_issue_code($pdo, $userId, $email);
+if (!$verificationResult['ok']) {
+    $statusCode = (int) ($verificationResult['statusCode'] ?? 500);
+    $reason = (string) ($verificationResult['reason'] ?? 'unknown');
+
+    $errorMessage = $verificationResult['error'] ?? 'Неуспешно изпращане на код.';
+    if ($reason === 'sendFailed') {
+        $errorMessage = 'Профилът е създаден, но кодът не можа да бъде изпратен. Опитай отново по-късно.';
+        $statusCode = 503;
+    }
+
+    if ($reason === 'hourlyLimit') {
+        $statusCode = 429;
+    }
+
+    $payload = [
+        'ok' => false,
+        'requiresVerification' => true,
+        'email' => $email,
+        'error' => $errorMessage,
+    ];
+
+    if ($reason === 'sendFailed') {
+        $payload['emailDeliveryFailed'] = true;
+    }
+
+    if (isset($verificationResult['retryAfterSeconds'])) {
+        $payload['retryAfterSeconds'] = (int) $verificationResult['retryAfterSeconds'];
+    }
+
+    if (isset($verificationResult['cooldownRemaining'])) {
+        $payload['cooldownRemaining'] = (int) $verificationResult['cooldownRemaining'];
+    }
+
+    json_response($statusCode, $payload);
+}
 
 json_response(201, [
     'ok' => true,
-    'user' => [
-        'id' => $userId,
-        'firstName' => $firstName,
-        'lastName' => $lastName,
-        'email' => $email,
-        'country' => 'България',
-        'role' => $meta['role'],
-        'profileStatus' => $meta['profileStatus'],
-        'isVerified' => $meta['isVerified'],
-        'lastLoginAt' => $meta['lastLoginAt'],
-    ],
+    'requiresVerification' => true,
+    'email' => $email,
+    'message' => 'Изпратихме код за потвърждение на твоя имейл.',
 ]);

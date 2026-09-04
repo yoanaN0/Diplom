@@ -201,6 +201,14 @@ const COLUMN_KEYWORDS = {
     "account",
     "сметка",
   ],
+  externalReference: [
+    "свързваща референция",
+    "референция",
+    "reference",
+    "transaction reference",
+    "transaction id",
+    "authorization code",
+  ],
 };
 
 function mapColumns(headerRow = []) {
@@ -371,15 +379,65 @@ function inferTransactionType(rawType, amount, description = "") {
   return "income";
 }
 
-export function buildCsvRowDedupeKey(row, walletId = null) {
-  const normalizedDate = dateToIso(row?.date ?? "") || "";
-  const normalizedDescription = String(row?.description ?? row?.title ?? "")
+function normalizeDescriptionForDedupe(value = "") {
+  return String(value ?? "")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
-  const normalizedAmount = Number.isFinite(Number(row?.amount ?? 0)) ? Number(Number(row?.amount ?? 0)).toFixed(2) : "0.00";
+}
 
-  return `${Number(walletId ?? 0)}:${normalizedDate}:${normalizedAmount}:${normalizedDescription}`;
+function normalizeTypeForDedupe(value = "", amount = 0) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "income" || normalized === "expense") {
+    return normalized;
+  }
+
+  return Number(amount) < 0 ? "expense" : "income";
+}
+
+function normalizeAmountForDedupe(value = 0) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) {
+    return "0.00";
+  }
+
+  return Math.abs(numeric).toFixed(2);
+}
+
+function formatLocalDateForMessage(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isoDateToLocalDate(value) {
+  const parts = String(value || "").split("-");
+  if (parts.length !== 3) {
+    return null;
+  }
+
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function buildCsvRowDedupeKey(row, walletId = null) {
+  const normalizedDate = dateToIso(row?.date ?? "") || "";
+  const normalizedDescription = normalizeDescriptionForDedupe(row?.description ?? row?.title ?? "");
+  const normalizedType = normalizeTypeForDedupe(row?.type ?? "", row?.amount ?? 0);
+  const normalizedAmount = normalizeAmountForDedupe(row?.amount ?? 0);
+  const normalizedWalletId = Number(walletId ?? row?.walletId ?? row?.wallet_id ?? 0);
+
+  return `${normalizedWalletId}:${normalizedDate}:${normalizedType}:${normalizedAmount}:${normalizedDescription}`;
 }
 
 export function evaluateCsvRowStatus(row, existingTransactions = [], walletId = null, now = new Date(), currentSeenHashes = null) {
@@ -395,12 +453,12 @@ export function evaluateCsvRowStatus(row, existingTransactions = [], walletId = 
 
   const startDate = new Date(now);
   startDate.setHours(0, 0, 0, 0);
-  startDate.setDate(startDate.getDate() - 7);
+  startDate.setDate(startDate.getDate() - 6);
 
   const endDate = new Date(now);
   endDate.setHours(23, 59, 59, 999);
 
-  const candidateDate = parsedDate ? new Date(`${parsedDate}T00:00:00`) : null;
+  const candidateDate = parsedDate ? isoDateToLocalDate(parsedDate) : null;
   const isWithinWindow = candidateDate && candidateDate >= startDate && candidateDate <= endDate;
 
   if (!parsedDate || !candidateDate || Number.isNaN(candidateDate.getTime())) {
@@ -418,22 +476,25 @@ export function evaluateCsvRowStatus(row, existingTransactions = [], walletId = 
   if (!isWithinWindow) {
     return {
       status: "outsideWindow",
-      issue: `Извън период от последните 7 дни (${startDate.toISOString().slice(0, 10)} до ${endDate.toISOString().slice(0, 10)}).`,
+      issue: `Извън период от последните 7 дни (${formatLocalDateForMessage(startDate)} до ${formatLocalDateForMessage(endDate)}).`,
     };
   }
 
   const seenHashes = new Set();
   for (const transaction of existingTransactions) {
-    const normalizedDescription = String(transaction?.description ?? transaction?.title ?? "").trim().toLowerCase();
+    const normalizedDescription = normalizeDescriptionForDedupe(transaction?.description ?? transaction?.title ?? "");
     const normalizedDate = dateToIso(transaction?.date ?? transaction?.transactionDate ?? transaction?.transaction_date ?? "");
     const normalizedAmount = Number(transaction?.amount ?? 0);
+    const existingWalletId = Number(transaction?.walletId ?? transaction?.wallet_id ?? 0);
+    const normalizedType = normalizeTypeForDedupe(transaction?.type ?? "", normalizedAmount);
 
-    if (normalizedDescription && normalizedDate && Number.isFinite(normalizedAmount)) {
+    if (normalizedDescription && normalizedDate && Number.isFinite(normalizedAmount) && existingWalletId > 0) {
       seenHashes.add(buildCsvRowDedupeKey({
         date: normalizedDate,
         description: normalizedDescription,
         amount: normalizedAmount,
-      }));
+        type: normalizedType,
+      }, existingWalletId));
     }
   }
 
@@ -441,6 +502,7 @@ export function evaluateCsvRowStatus(row, existingTransactions = [], walletId = 
     date: parsedDate,
     description: normalizedDescription,
     amount: parsedAmount,
+    type: rawType,
   }, Number(walletId));
 
   if (currentSeenHashes) {
@@ -538,6 +600,7 @@ export function buildCsvImportPreview(csvText, options = {}) {
     const inferredType = inferTransactionType(typeValue, parsedAmount, String(descriptionValue || ""));
     const parsedDate = dateToIso(dateValue);
     const normalizedDescription = String(descriptionValue || "").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const externalReferenceValue = getField("externalReference", ["свързваща референция", "референция", "reference", "transaction reference", "transaction id", "authorization code"]) || "";
 
     const candidate = {
       id: `${index + 1}-${Date.now()}`,
@@ -546,6 +609,7 @@ export function buildCsvImportPreview(csvText, options = {}) {
       amount: parsedAmount !== null ? Number(parsedAmount.toFixed(2)) : 0,
       type: inferredType,
       category: "",
+      externalReference: String(externalReferenceValue || "").trim(),
     };
 
     const { status, issue } = evaluateCsvRowStatus(candidate, existingTransactions, walletId, now, currentSeenHashes);
@@ -563,6 +627,11 @@ export function buildCsvImportPreview(csvText, options = {}) {
   const duplicateRows = payloadRows.filter((row) => row.status === "duplicate");
   const invalidRows = payloadRows.filter((row) => row.status === "invalid");
   const outsideWindowRows = payloadRows.filter((row) => row.status === "outsideWindow");
+  const windowStart = new Date(now);
+  windowStart.setHours(0, 0, 0, 0);
+  windowStart.setDate(windowStart.getDate() - 6);
+  const windowEnd = new Date(now);
+  windowEnd.setHours(0, 0, 0, 0);
 
   return {
     rows: payloadRows,
@@ -570,8 +639,8 @@ export function buildCsvImportPreview(csvText, options = {}) {
     duplicateRows: duplicateRows.length,
     invalidRows: invalidRows.length,
     outsideWindowRows: outsideWindowRows.length,
-    startDate: new Date(now).setDate(new Date(now).getDate() - 7),
-    endDate: new Date(now).toISOString().slice(0, 10),
+    startDate: formatLocalDateForMessage(windowStart),
+    endDate: formatLocalDateForMessage(windowEnd),
     error: payloadRows.some((row) => row.status === "outsideWindow") ? "Някои редове са извън допустимия 7-дневен период." : "",
   };
 }

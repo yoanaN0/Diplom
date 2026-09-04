@@ -140,6 +140,26 @@ npm run build    # build за production
 npm run lint     # проверка на ESLint
 ```
 
+## Имейл потвърждение (реални мейли)
+
+Регистрацията използва код за потвърждение по имейл. За реално изпращане задайте SMTP променливи за Apache/PHP:
+
+```bash
+MAIL_TRANSPORT=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_ENCRYPTION=tls
+SMTP_USERNAME=your-account@gmail.com
+SMTP_PASSWORD=your-app-password
+MAIL_FROM_ADDRESS=your-account@gmail.com
+MAIL_FROM_NAME=Finly
+```
+
+Бележки:
+- При Gmail използвайте App Password.
+- След промяна на env променливите рестартирайте Apache.
+- Ако SMTP не е настроен, кодът се записва локално в `api/tmp/email_verification_outbox.log`.
+
 ## Бележки
 
 - За да работи приложението коректно, API и MySQL трябва да са стартирани в WAMP.
