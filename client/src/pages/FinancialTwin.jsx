@@ -138,14 +138,17 @@ function normalizeSavedDraft(rawDraft) {
           .filter((rule) => rule && typeof rule === "object")
           .map((rule) => {
             const start = Math.min(Number(rule.startMonth) || 0, maxOffset);
-            const endRaw = Number(rule.endMonth);
-            const hasEnd = Number.isFinite(endRaw) && endRaw >= start;
+            const rawEndMonth = rule.endMonth;
+            const endMonthValue = rawEndMonth === "" || rawEndMonth === null || rawEndMonth === undefined
+              ? null
+              : Number(rawEndMonth);
+            const hasEnd = Number.isFinite(endMonthValue) && endMonthValue >= start;
 
             return {
               category: String(rule.category || "").trim(),
               percent: String(rule.percent ?? source.cutPercent ?? "10"),
               startMonth: String(start),
-              endMonth: hasEnd ? String(Math.min(endRaw, maxOffset)) : "",
+              endMonth: hasEnd ? String(Math.min(endMonthValue, maxOffset)) : "",
             };
           })
           .filter((rule) => rule.category !== "")
@@ -153,10 +156,68 @@ function normalizeSavedDraft(rawDraft) {
   };
 }
 
+function normalizeCategoryName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s\-_]+/g, " ")
+    .replace(/[^a-zа-я0-9 ]/gi, "")
+    .replace(/\s+/g, " ");
+}
+
+function buildRecurringExpenseItems(baseline) {
+  const grouped = new Map();
+
+  const addEntry = (entry, kind) => {
+    const rawCategory = String(entry?.category || "Други").trim();
+    const categoryName = normalizeCategoryName(rawCategory) || "други";
+    const current = grouped.get(categoryName) || {
+      key: categoryName,
+      title: rawCategory || "Други",
+      category: rawCategory || "Други",
+      amount: 0,
+      confidenceWeighted: 0,
+      confidenceWeight: 0,
+    };
+
+    const amount = Number(entry?.amount) || 0;
+    const confidence = Number(entry?.confidence) || 0;
+    current.amount += amount;
+    current.confidenceWeighted += amount * confidence;
+    current.confidenceWeight += amount;
+
+    if (kind === "recurring" && current.title === "Други") {
+      current.title = rawCategory || "Други";
+    }
+
+    grouped.set(categoryName, current);
+  };
+
+  (baseline?.recurringExpenses || []).forEach((item) => addEntry(item, "recurring"));
+  (baseline?.variableExpenses || []).forEach((item) => addEntry(item, "variable"));
+
+  return Array.from(grouped.values())
+    .map((item) => ({
+      key: item.key,
+      title: item.title,
+      category: item.category,
+      amount: Number(item.amount.toFixed(2)),
+      confidence: item.confidenceWeight > 0
+        ? Number((item.confidenceWeighted / item.confidenceWeight).toFixed(2))
+        : 0,
+    }))
+    .sort((left, right) => right.amount - left.amount);
+}
+
 function FinancialTwin() {
   const { transactions, loading, error } = useTransactions();
   const [draft, setDraft] = useState(initialDraft);
-  const [projectionStartDate] = useState(() => new Date());
+  const [projectionStartDate] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  });
   const [wallets, setWallets] = useState([]);
   const [savedScenarios, setSavedScenarios] = useState([]);
   const [scenarioName, setScenarioName] = useState("");
@@ -237,7 +298,7 @@ function FinancialTwin() {
   }, []);
 
   const currentBalance = useMemo(
-    () => wallets.reduce((sum, wallet) => sum + wallet.balance, 0),
+    () => wallets.reduce((sum, wallet) => sum + (wallet.isActive ? Number(wallet.balance) || 0 : 0), 0),
     [wallets],
   );
 
@@ -250,36 +311,7 @@ function FinancialTwin() {
   }, [baseline]);
 
   const recurringExpenseItems = useMemo(() => {
-    const merged = new Map();
-
-    baseline.recurringExpenses.forEach((item) => {
-      merged.set(item.category, {
-        key: `recurring-${item.category}`,
-        title: item.category,
-        category: item.category,
-        amount: item.amount,
-        confidence: Math.max(item.confidence || 0, 0.6),
-        occurrences: item.occurrences || 1,
-      });
-    });
-
-    baseline.variableExpenses.forEach((item) => {
-      const category = item.category;
-      const current = merged.get(category);
-
-      if (!current || item.amount > current.amount) {
-        merged.set(category, {
-          key: `variable-${category}`,
-          title: category,
-          category,
-          amount: item.amount,
-          confidence: 0.5,
-          occurrences: item.monthsOfData || 1,
-        });
-      }
-    });
-
-    return [...merged.values()].sort((left, right) => right.amount - left.amount);
+    return buildRecurringExpenseItems(baseline);
   }, [baseline]);
 
   const horizonMonths = Math.max(1, Number(draft.horizon) || 12);
@@ -392,9 +424,10 @@ function FinancialTwin() {
       const startMonthValue = Number.isFinite(Number(storedRule?.startMonth))
         ? Number(storedRule.startMonth)
         : Number(draft.cutStart) || 0;
-      const endMonthValue = Number.isFinite(Number(storedRule?.endMonth))
-        ? Number(storedRule.endMonth)
-        : undefined;
+      const rawEndMonth = storedRule?.endMonth;
+      const endMonthValue = rawEndMonth === "" || rawEndMonth === null || rawEndMonth === undefined
+        ? undefined
+        : Number(rawEndMonth);
 
       return {
         category,
@@ -433,14 +466,6 @@ function FinancialTwin() {
               annualRate: Number(draft.loanRate) || 0,
               months: Number(draft.loanMonths) || 1,
               startMonth: Number(draft.loanStart) || 0,
-            }
-          : undefined,
-      spendingCut:
-        draft.enableSpendingCut && cutCategories.length > 0 && Number.isFinite(cutPercent) && cutPercent > 0
-          ? {
-              categories: cutCategories,
-              percent: cutPercent,
-              startMonth: Number(draft.cutStart) || 0,
             }
           : undefined,
       spendingCuts: spendingCuts.length > 0 ? spendingCuts : undefined,
@@ -581,6 +606,8 @@ function FinancialTwin() {
       modifiers: scenarioModifiers,
     });
   }, [baseline, currentBalance, horizonMonths, projectionStartDate, scenarioModifiers]);
+
+  const insufficientHistory = baseline?.insufficientHistory === true;
 
   const chartModel = useMemo(() => {
     const baselinePoints = comparison.baselineProjection.points;
@@ -1268,6 +1295,11 @@ function FinancialTwin() {
 
         {isLoading ? <p className="muted">Зареждане на данни...</p> : null}
         {displayError ? <p className="muted">{displayError}</p> : null}
+        {!isLoading && !displayError && insufficientHistory ? (
+          <p className="muted" style={{ marginBottom: "1rem" }}>
+            Все още няма достатъчно исторически данни за надеждна базова прогноза. Необходими са поне два завършени месеца.
+          </p>
+        ) : null}
 
         {!isLoading && !displayError ? (
           <>

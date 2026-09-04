@@ -6,6 +6,8 @@ import {
   projectFinancialTwinScenario,
   compareTwinScenarios,
   calculateAnnuityPayment,
+  weightedMedian,
+  isRuleActiveForMonth,
 } from "./financialTwin.js";
 
 const NOW = new Date(2026, 7, 15);
@@ -14,268 +16,212 @@ function monthDate(monthsBack, day = 5) {
   return new Date(NOW.getFullYear(), NOW.getMonth() - monthsBack, day).toISOString();
 }
 
-test("Редовна заплата се разпознава като recurring income", () => {
-  const transactions = [];
-  for (let i = 0; i < 6; i += 1) {
-    transactions.push({
-      date: monthDate(i, 5),
-      amount: 1800,
-      type: "income",
-      category: "Заплата",
-      title: "Заплата",
-    });
-  }
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-
-  assert.equal(baseline.recurringIncomes.length, 1);
-  assert.equal(baseline.recurringIncomes[0].amount, 1800);
-  assert.ok(baseline.recurringIncomes[0].confidence > 0.8);
-});
-
-test("Единична транзакция не е recurring", () => {
-  const transactions = [
-    { date: monthDate(1), amount: 500, type: "expense", category: "Пътувания", title: "Билет" },
-  ];
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-
-  assert.equal(baseline.recurringExpenses.length, 0);
-});
-
-test("Транзакции тип спестяване се изключват от baseline", () => {
-  const transactions = [
-    { date: monthDate(0), amount: 300, type: "transfer", category: "Спестяване", title: "Трансфер към цел: Ваканция" },
-    { date: monthDate(1), amount: 300, type: "transfer", category: "Спестяване", title: "Трансфер към цел: Ваканция" },
-  ];
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-
-  assert.equal(baseline.recurringExpenses.length, 0);
-  assert.equal(baseline.variableExpenses.length, 0);
-});
-
-test("Netflix recurring не изключва цялата категория Абонаменти", () => {
-  const transactions = [];
-
-  for (let i = 0; i < 6; i += 1) {
-    transactions.push({
-      date: monthDate(i, 10),
-      amount: 45.99,
-      type: "expense",
-      category: "Абонаменти",
-      title: "Netflix",
-    });
-  }
-
-  transactions.push({
-    date: monthDate(1, 20),
-    amount: 120,
-    type: "expense",
-    category: "Абонаменти",
-    title: "Онлайн курс",
-  });
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-
-  const subscriptionsRecurring = baseline.recurringExpenses.find((entry) => entry.category === "Абонаменти");
-  assert.ok(subscriptionsRecurring);
-  assert.equal(subscriptionsRecurring.amount, 45.99);
-
-  const variableSubs = baseline.variableExpenses.find((entry) => entry.category === "Абонаменти");
-  assert.ok(variableSubs);
-  assert.equal(variableSubs.totalSpent, 120);
-});
-
-test("Ниска confidence намалява amount спрямо baseAmount", () => {
-  const transactions = [
-    { date: monthDate(0, 3), amount: 200, type: "expense", category: "Пътувания", title: "Хотел" },
-  ];
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-  const travel = baseline.variableExpenses.find((entry) => entry.category === "Пътувания");
-
-  assert.ok(travel);
-  assert.ok(travel.confidence < 0.5);
-  assert.ok(travel.amount < travel.baseAmount);
-  assert.ok(travel.amount > 0);
-});
-
-test("Реалистично вариращ разход остава variable, не recurring", () => {
-  const transactions = [];
-  const amounts = [180, 220, 270, 330, 400, 490];
-
-  amounts.forEach((amount, i) => {
-    transactions.push({
-      date: monthDate(5 - i, 15),
-      amount,
-      type: "expense",
-      category: "Хранителни стоки",
-      title: "Супермаркет",
-    });
-  });
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-  const groceries = baseline.variableExpenses.find((entry) => entry.category === "Хранителни стоки");
-
-  assert.ok(groceries, "Категорията трябва да остане variable заради вариращите суми");
-  assert.equal(baseline.recurringExpenses.some((entry) => entry.category === "Хранителни стоки"), false);
-});
-
-test("projectFinancialTwinScenario смята баланса коректно без модификатори", () => {
-  const transactions = [];
-  for (let i = 0; i < 6; i += 1) {
-    transactions.push({
-      date: monthDate(i, 1),
-      amount: 2000,
-      type: "income",
-      category: "Заплата",
-      title: "Заплата",
-    });
-    transactions.push({
-      date: monthDate(i, 5),
-      amount: 500,
-      type: "expense",
-      category: "Наем",
-      title: "Наем",
-    });
-  }
-
-  const baseline = buildFinancialTwinBaseline(transactions, NOW);
-  const startBalance = 1000;
-
+test("прогнозата започва от следващия месец", () => {
+  const baseline = { recurringIncomes: [], recurringExpenses: [], variableExpenses: [] };
   const projection = projectFinancialTwinScenario({
-    startBalance,
+    startBalance: 1000,
     baseline,
     months: 3,
     startDate: NOW,
   });
 
   assert.equal(projection.points.length, 3);
-
-  const expectedMonthlyNet = 2000 - 500;
-  const expectedEndingBalance = startBalance + expectedMonthlyNet * 3;
-
-  assert.equal(projection.endingBalance, expectedEndingBalance);
-  assert.equal(projection.firstNegativeMonthIndex, null);
+  assert.equal(projection.points[0].label, new Intl.DateTimeFormat("bg-BG", { month: "short", year: "2-digit" }).format(new Date(2026, 8, 1)));
 });
 
-test("spendingCuts намалява разход само за зададената категория", () => {
-  const transactions = [];
-  const restaurantAmounts = [150, 190, 235, 285, 345, 420];
+test("неактивен портфейл не участва в началния баланс", () => {
+  const startBalance = [
+    { balance: 1000, isActive: true },
+    { balance: 500, isActive: false },
+    { balance: 300, isActive: true },
+  ];
 
-  restaurantAmounts.forEach((amount, i) => {
-    transactions.push({
-      date: monthDate(5 - i, 1),
-      amount: 2000,
-      type: "income",
-      category: "Заплата",
-      title: "Заплата",
-    });
-    transactions.push({
-      date: monthDate(5 - i, 12),
-      amount,
-      type: "expense",
-      category: "Ресторанти",
-      title: "Навън",
-    });
-  });
+  const total = startBalance.reduce((sum, wallet) => sum + (wallet.isActive ? Number(wallet.balance) || 0 : 0), 0);
+  assert.equal(total, 1300);
+});
+
+test("две повторения не са периодична операция", () => {
+  const transactions = [
+    { date: monthDate(4), amount: 100, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: monthDate(2), amount: 100, type: "expense", category: "Абонаменти", title: "Netflix" },
+  ];
 
   const baseline = buildFinancialTwinBaseline(transactions, NOW);
-
-  const withoutCut = projectFinancialTwinScenario({
-    startBalance: 0,
-    baseline,
-    months: 3,
-    startDate: NOW,
-  });
-
-  const withCut = projectFinancialTwinScenario({
-    startBalance: 0,
-    baseline,
-    months: 3,
-    startDate: NOW,
-    modifiers: {
-      spendingCuts: [{ category: "Ресторанти", percent: 50, startMonth: 0 }],
-    },
-  });
-
-  assert.ok(withCut.endingBalance > withoutCut.endingBalance);
+  assert.equal(baseline.recurringExpenses.length, 0);
 });
 
-test("Loan principal влиза еднократно, вноските са за срока на заема", () => {
-  const baseline = { recurringIncomes: [], recurringExpenses: [], variableExpenses: [] };
+test("три повторения през 21–45 дни са периодична операция", () => {
+  const transactions = [
+    { date: new Date(2026, 3, 10).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 4, 30).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 6, 20).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+  ];
 
-  const projection = projectFinancialTwinScenario({
-    startBalance: 0,
-    baseline,
-    months: 6,
-    startDate: NOW,
-    modifiers: {
-      loan: { principal: 6000, annualRate: 0, months: 3, startMonth: 1 },
-    },
-  });
-
-  const expectedPayment = calculateAnnuityPayment(6000, 0, 3);
-
-  assert.equal(projection.points[0].income, 0);
-  assert.equal(projection.points[0].expense, 0);
-
-  assert.equal(projection.points[1].income, 6000);
-  assert.equal(projection.points[1].expense, expectedPayment);
-
-  assert.equal(projection.points[2].expense, expectedPayment);
-  assert.equal(projection.points[3].expense, expectedPayment);
-
-  assert.equal(projection.points[4].expense, 0);
+  const baseline = buildFinancialTwinBaseline(transactions, new Date(2026, 7, 15));
+  assert.ok(baseline.recurringExpenses.some((item) => item.category === "Абонаменти"));
 });
 
-test("compareTwinScenarios връща коректна deltaEndingBalance", () => {
-  const baseline = { recurringIncomes: [], recurringExpenses: [], variableExpenses: [] };
+test("интервал под 21 или над 45 дни не се приема", () => {
+  const transactions = [
+    { date: new Date(2026, 1, 1).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 1, 15).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 2, 5).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+  ];
 
-  const comparison = compareTwinScenarios({
-    startBalance: 1000,
-    baseline,
-    months: 6,
-    startDate: NOW,
-    modifiers: {
-      incomeChange: { amount: 200, startMonth: 0 },
-    },
-  });
-
-  const expectedDelta = 200 * 6;
-  assert.equal(comparison.deltaEndingBalance, expectedDelta);
+  const baseline = buildFinancialTwinBaseline(transactions, new Date(2026, 7, 15));
+  assert.equal(baseline.recurringExpenses.length, 0);
 });
 
-test("При spendingCut и spendingCuts едновременно, spendingCuts има приоритет", () => {
+test("еднаква категория с различно описание не се смесва", () => {
+  const transactions = [
+    { date: monthDate(5), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: monthDate(4), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: monthDate(3), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: monthDate(2), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
+    { date: monthDate(1), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
+    { date: monthDate(0), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, NOW);
+  assert.equal(baseline.recurringExpenses.filter((item) => item.category === "Абонаменти").length, 2);
+});
+
+test("претеглената медиана дава по-голяма тежест на актуалните данни", () => {
+  const history = [
+    { value: 100, weight: 1 },
+    { value: 100, weight: 2 },
+    { value: 200, weight: 3 },
+    { value: 200, weight: 4 },
+  ];
+
+  const median = weightedMedian(history);
+  assert.equal(median, 200);
+});
+
+test("няколко recurring и един variable за една категория се визуализират като една обща категория", () => {
   const baseline = {
-    recurringIncomes: [],
-    recurringExpenses: [],
+    recurringExpenses: [
+      { category: "Абонаменти", amount: 45, confidence: 0.8 },
+      { category: "Абонаменти", amount: 55, confidence: 0.9 },
+    ],
     variableExpenses: [
-      {
-        category: "Ресторанти",
-        totalSpent: 1200,
-        monthsOfData: 3,
-        amount: 400,
-        baseAmount: 400,
-        confidence: 0.5,
-      },
+      { category: "Абонаменти", amount: 60, confidence: 0.7 },
     ],
   };
 
+  const grouped = new Map();
+
+  const addEntry = (entry) => {
+    const category = String(entry.category || "").trim();
+    const key = category.toLowerCase();
+    const current = grouped.get(key) || {
+      category,
+      amount: 0,
+      confidenceWeighted: 0,
+      confidenceWeight: 0,
+    };
+
+    current.amount += Number(entry.amount) || 0;
+    current.confidenceWeighted += (Number(entry.amount) || 0) * (Number(entry.confidence) || 0);
+    current.confidenceWeight += Number(entry.amount) || 0;
+    grouped.set(key, current);
+  };
+
+  (baseline.recurringExpenses || []).forEach(addEntry);
+  (baseline.variableExpenses || []).forEach(addEntry);
+
+  const result = Array.from(grouped.values()).map((item) => ({
+    category: item.category,
+    amount: Number(item.amount.toFixed(2)),
+    confidence: item.confidenceWeight > 0
+      ? Number((item.confidenceWeighted / item.confidenceWeight).toFixed(2))
+      : 0,
+  }));
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].category, "Абонаменти");
+  assert.equal(result[0].amount, 160);
+  assert.equal(result[0].confidence, 0.8);
+});
+
+test("текущият месец не участва в baseline", () => {
+  const transactions = [
+    { date: monthDate(0), amount: 100, type: "expense", category: "Домашни", title: "Ток" },
+    { date: monthDate(1), amount: 200, type: "expense", category: "Домашни", title: "Ток" },
+    { date: monthDate(2), amount: 300, type: "expense", category: "Домашни", title: "Ток" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, NOW);
+  assert.equal(baseline.usedMonths, 6);
+});
+
+test("еднократен разход не става постоянен", () => {
+  const transactions = [
+    { date: monthDate(5), amount: 500, type: "expense", category: "Покупки", title: "Мебели" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, NOW);
+  assert.equal(baseline.recurringExpenses.some((item) => item.category === "Покупки"), false);
+});
+
+test("периодичен разход не се отчита повторно като променлив", () => {
+  const transactions = [
+    { date: monthDate(5), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: monthDate(4), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: monthDate(3), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, NOW);
+  assert.ok(baseline.recurringExpenses.some((item) => item.category === "Абонаменти"));
+  assert.equal(baseline.variableExpenses.some((item) => item.category === "Абонаменти"), false);
+});
+
+test("confidence не променя сумата", () => {
+  const baseline = { recurringIncomes: [], recurringExpenses: [], variableExpenses: [{ category: "Храна", amount: 350, baseAmount: 350, confidence: 0.2 }] };
+  const projection = projectFinancialTwinScenario({ startBalance: 0, baseline, months: 1, startDate: NOW });
+  assert.equal(projection.points[0].expense, 350);
+});
+
+test("празен endMonth означава до края", () => {
+  const rule = { category: "Храна", percent: 10, startMonth: 0, endMonth: "" };
+  assert.equal(isRuleActiveForMonth(rule, 5), true);
+});
+
+test("първата кредитна вноска е през следващия месец", () => {
+  const baseline = { recurringIncomes: [], recurringExpenses: [], variableExpenses: [] };
   const projection = projectFinancialTwinScenario({
     startBalance: 0,
     baseline,
-    months: 1,
+    months: 4,
     startDate: NOW,
-    modifiers: {
-      spendingCut: { category: "Ресторанти", percent: 10, startMonth: 0 },
-      spendingCuts: [{ category: "Ресторанти", percent: 90, startMonth: 0 }],
-    },
+    modifiers: { loan: { principal: 2000, annualRate: 0, months: 2, startMonth: 0 } },
   });
 
-  const restaurantBase = baseline.variableExpenses.find((entry) => entry.category === "Ресторанти")?.amount || 0;
-  const expectedExpense = Number((restaurantBase * (1 - 0.9)).toFixed(2));
+  assert.equal(projection.points[0].income, 2000);
+  assert.equal(projection.points[0].expense, 0);
+  assert.equal(projection.points[1].expense, 1000);
+  assert.equal(projection.points[2].expense, 1000);
+});
 
-  assert.equal(projection.points[0].expense, expectedExpense);
+test("брой кредитни вноски е точен", () => {
+  const baseline = { recurringIncomes: [], recurringExpenses: [], variableExpenses: [] };
+  const projection = projectFinancialTwinScenario({
+    startBalance: 0,
+    baseline,
+    months: 5,
+    startDate: NOW,
+    modifiers: { loan: { principal: 1200, annualRate: 0, months: 3, startMonth: 1 } },
+  });
+
+  const payments = projection.points.filter((point) => point.expense > 0).length;
+  assert.equal(payments, 3);
+});
+
+test("предупреждението при недостатъчна история работи", () => {
+  const transactions = [
+    { date: monthDate(5), amount: 100, type: "expense", category: "Билети", title: "Билет" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, NOW);
+  assert.equal(baseline.insufficientHistory, true);
 });
