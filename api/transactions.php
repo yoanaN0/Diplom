@@ -286,174 +286,6 @@ function adjust_wallet_balance(PDO $pdo, int $userId, ?int $walletId, float $del
     ]);
 }
 
-function reset_monthly_budget_spend(PDO $pdo, int $userId): void
-{
-    $currentMonth = date('Y-m');
-    $monthStart = date('Y-m-01');
-    $monthEnd = date('Y-m-t');
-
-    $stmt = $pdo->prepare(
-        'SELECT id, start_date, end_date, spent_amount FROM budgets
-         WHERE user_id = :user_id'
-    );
-    $stmt->execute([
-        'user_id' => $userId,
-    ]);
-
-    foreach ($stmt->fetchAll() as $budget) {
-        $startDate = $budget['start_date'];
-        $endDate = $budget['end_date'];
-
-        if ($startDate === null && $endDate === null) {
-            $pdo->prepare(
-                'UPDATE budgets
-                 SET start_date = :start_date,
-                     end_date = :end_date
-                 WHERE id = :id AND user_id = :user_id'
-            )->execute([
-                'start_date' => $monthStart,
-                'end_date' => $monthEnd,
-                'id' => (int) $budget['id'],
-                'user_id' => $userId,
-            ]);
-            continue;
-        }
-
-        $budgetMonth = $startDate ? date('Y-m', strtotime($startDate)) : $currentMonth;
-        if ($budgetMonth === $currentMonth) {
-            continue;
-        }
-
-        $pdo->prepare(
-            'UPDATE budgets
-             SET spent_amount = 0.00,
-                 start_date = :start_date,
-                 end_date = :end_date
-             WHERE id = :id AND user_id = :user_id'
-        )->execute([
-            'start_date' => $monthStart,
-            'end_date' => $monthEnd,
-            'id' => (int) $budget['id'],
-            'user_id' => $userId,
-        ]);
-    }
-}
-
-function is_savings_category(string $categoryName): bool
-{
-    $normalized = strtolower(trim($categoryName));
-
-    return $normalized === 'спестяване' || $normalized === 'savings';
-}
-
-function budget_expense_delta(string $type, float $amount): float
-{
-    $normalizedType = strtolower(trim($type));
-    if ($normalizedType !== 'expense') {
-        return 0.0;
-    }
-
-    return $amount;
-}
-
-function sync_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $categoryName, string $type, float $amount): void
-{
-    reset_monthly_budget_spend($pdo, $userId);
-
-    if ($categoryId === null || $categoryName === '') {
-        return;
-    }
-
-    if (is_savings_category($categoryName)) {
-        return;
-    }
-
-    $delta = budget_expense_delta($type, $amount);
-    if ($delta <= 0) {
-        return;
-    }
-
-    $stmt = $pdo->prepare(
-        'SELECT id, spent_amount FROM budgets
-         WHERE user_id = :user_id AND category_id = :category_id LIMIT 1'
-    );
-    $stmt->execute(['user_id' => $userId, 'category_id' => $categoryId]);
-    $budget = $stmt->fetch();
-
-    if (!$budget) {
-        $stmt = $pdo->prepare(
-            'INSERT INTO budgets (user_id, category_id, category_name, period, limit_amount, spent_amount, start_date, end_date)
-             VALUES (:user_id, :category_id, :category_name, :period, :limit_amount, :spent_amount, :start_date, :end_date)'
-        );
-        $stmt->execute([
-            'user_id' => $userId,
-            'category_id' => $categoryId,
-            'category_name' => $categoryName,
-            'period' => 'monthly',
-            'limit_amount' => 0,
-            'spent_amount' => number_format($delta, 2, '.', ''),
-            'start_date' => null,
-            'end_date' => null,
-        ]);
-        return;
-    }
-
-    $nextSpent = (float) $budget['spent_amount'] + $delta;
-    $stmt = $pdo->prepare(
-        'UPDATE budgets
-         SET spent_amount = :spent_amount, category_name = :category_name
-         WHERE id = :id AND user_id = :user_id'
-    );
-    $stmt->execute([
-        'spent_amount' => number_format($nextSpent, 2, '.', ''),
-        'category_name' => $categoryName,
-        'id' => (int) $budget['id'],
-        'user_id' => $userId,
-    ]);
-}
-
-function reverse_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $categoryName, string $type, float $amount): void
-{
-    reset_monthly_budget_spend($pdo, $userId);
-
-    if ($categoryId === null || $categoryName === '') {
-        return;
-    }
-
-    if (is_savings_category($categoryName)) {
-        return;
-    }
-
-    $delta = budget_expense_delta($type, $amount);
-    if ($delta <= 0) {
-        return;
-    }
-
-    $stmt = $pdo->prepare(
-        'SELECT id, spent_amount FROM budgets
-         WHERE user_id = :user_id AND category_id = :category_id LIMIT 1'
-    );
-    $stmt->execute(['user_id' => $userId, 'category_id' => $categoryId]);
-    $budget = $stmt->fetch();
-
-    if (!$budget) {
-        return;
-    }
-
-    $nextSpent = max(0.0, (float) $budget['spent_amount'] - $delta);
-    $stmt = $pdo->prepare(
-        'UPDATE budgets
-         SET spent_amount = :spent_amount, category_name = :category_name
-         WHERE id = :id AND user_id = :user_id'
-    );
-    $stmt->execute([
-        'spent_amount' => number_format($nextSpent, 2, '.', ''),
-        'category_name' => $categoryName,
-        'id' => (int) $budget['id'],
-        'user_id' => $userId,
-    ]);
-}
-
 if ($method === 'GET') {
     $id = api_int_or_null($data['id'] ?? null);
 
@@ -560,7 +392,6 @@ if ($method === 'POST') {
     }
 
     adjust_wallet_balance($pdo, $userId, $wallet['id'], $walletDelta);
-    sync_budget_spend($pdo, $userId, $category['id'], $category['label'], $type, (float) $amount);
 
     $stmt = $pdo->prepare('SELECT * FROM transactions WHERE id = :id AND user_id = :user_id LIMIT 1');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
@@ -665,9 +496,6 @@ if ($method === 'PUT') {
         adjust_wallet_balance($pdo, $userId, $wallet['id'], $newDelta);
     }
 
-    reverse_budget_spend($pdo, $userId, $existing['category_id'] === null ? null : (int) $existing['category_id'], $existing['category_label'] ?? '', (string) $existing['type'], (float) $existing['amount']);
-    sync_budget_spend($pdo, $userId, $category['id'], $category['label'], $type, $newAmount);
-
     $stmt = $pdo->prepare('SELECT * FROM transactions WHERE id = :id AND user_id = :user_id LIMIT 1');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
 
@@ -697,7 +525,6 @@ if ($method === 'DELETE') {
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
 
     adjust_wallet_balance($pdo, $userId, $walletId, -$walletDelta);
-    reverse_budget_spend($pdo, $userId, $existing['category_id'] === null ? null : (int) $existing['category_id'], $existing['category_label'] ?? '', (string) $existing['type'], (float) $existing['amount']);
 
     json_response(200, ['ok' => true]);
 }

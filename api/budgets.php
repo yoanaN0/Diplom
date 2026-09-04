@@ -6,6 +6,7 @@ require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/lib/response.php';
 require __DIR__ . '/lib/db.php';
 require __DIR__ . '/lib/api_helpers.php';
+require __DIR__ . '/lib/budget_spent.php';
 
 $method = api_method();
 $pdo = api_pdo();
@@ -30,59 +31,6 @@ function budget_payload(array $row): array
         'createdAt' => $row['created_at'],
         'updatedAt' => $row['updated_at'],
     ];
-}
-
-function reset_monthly_budget_spend(PDO $pdo, int $userId): void
-{
-    $currentMonth = date('Y-m');
-    $monthStart = date('Y-m-01');
-    $monthEnd = date('Y-m-t');
-
-    $stmt = $pdo->prepare(
-        'SELECT id, start_date, end_date, spent_amount FROM budgets
-         WHERE user_id = :user_id'
-    );
-    $stmt->execute([
-        'user_id' => $userId,
-    ]);
-
-    foreach ($stmt->fetchAll() as $budget) {
-        $startDate = $budget['start_date'];
-        $endDate = $budget['end_date'];
-
-        if ($startDate === null && $endDate === null) {
-            $pdo->prepare(
-                'UPDATE budgets
-                 SET start_date = :start_date,
-                     end_date = :end_date
-                 WHERE id = :id AND user_id = :user_id'
-            )->execute([
-                'start_date' => $monthStart,
-                'end_date' => $monthEnd,
-                'id' => (int) $budget['id'],
-                'user_id' => $userId,
-            ]);
-            continue;
-        }
-
-        $budgetMonth = $startDate ? date('Y-m', strtotime($startDate)) : $currentMonth;
-        if ($budgetMonth === $currentMonth) {
-            continue;
-        }
-
-        $pdo->prepare(
-            'UPDATE budgets
-             SET spent_amount = 0.00,
-                 start_date = :start_date,
-                 end_date = :end_date
-             WHERE id = :id AND user_id = :user_id'
-        )->execute([
-            'start_date' => $monthStart,
-            'end_date' => $monthEnd,
-            'id' => (int) $budget['id'],
-            'user_id' => $userId,
-        ]);
-    }
 }
 
 function ensure_budget_category(PDO $pdo, int $userId, string $name): int
@@ -114,103 +62,7 @@ function ensure_budget_category(PDO $pdo, int $userId, string $name): int
     return (int) $pdo->lastInsertId();
 }
 
-function budget_expense_delta(string $type, float $amount): float
-{
-    $normalizedType = strtolower(trim($type));
-    if ($normalizedType !== 'expense') {
-        return 0.0;
-    }
-
-    return $amount;
-}
-
-function sync_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $categoryName, string $type, float $amount): void
-{
-    if ($categoryId === null || $categoryName === '') {
-        return;
-    }
-
-    $delta = budget_expense_delta($type, $amount);
-    if ($delta <= 0) {
-        return;
-    }
-
-    $stmt = $pdo->prepare(
-        'SELECT id, category_name, spent_amount FROM budgets
-         WHERE user_id = :user_id AND category_id = :category_id LIMIT 1'
-    );
-    $stmt->execute(['user_id' => $userId, 'category_id' => $categoryId]);
-    $budget = $stmt->fetch();
-
-    if (!$budget) {
-        $stmt = $pdo->prepare(
-            'INSERT INTO budgets (user_id, category_id, category_name, period, limit_amount, spent_amount, start_date, end_date)
-             VALUES (:user_id, :category_id, :category_name, :period, :limit_amount, :spent_amount, :start_date, :end_date)'
-        );
-        $stmt->execute([
-            'user_id' => $userId,
-            'category_id' => $categoryId,
-            'category_name' => $categoryName,
-            'period' => 'monthly',
-            'limit_amount' => 0,
-            'spent_amount' => number_format($delta, 2, '.', ''),
-            'start_date' => null,
-            'end_date' => null,
-        ]);
-        return;
-    }
-
-    $nextSpent = (float) $budget['spent_amount'] + $delta;
-    $stmt = $pdo->prepare(
-        'UPDATE budgets
-         SET spent_amount = :spent_amount
-         WHERE id = :id AND user_id = :user_id'
-    );
-    $stmt->execute([
-        'spent_amount' => number_format($nextSpent, 2, '.', ''),
-        'id' => (int) $budget['id'],
-        'user_id' => $userId,
-    ]);
-}
-
-function reverse_budget_spend(PDO $pdo, int $userId, ?int $categoryId, string $categoryName, string $type, float $amount): void
-{
-    if ($categoryId === null || $categoryName === '') {
-        return;
-    }
-
-    $delta = budget_expense_delta($type, $amount);
-    if ($delta <= 0) {
-        return;
-    }
-
-    $stmt = $pdo->prepare(
-        'SELECT id, spent_amount FROM budgets
-         WHERE user_id = :user_id AND category_id = :category_id LIMIT 1'
-    );
-    $stmt->execute(['user_id' => $userId, 'category_id' => $categoryId]);
-    $budget = $stmt->fetch();
-
-    if (!$budget) {
-        return;
-    }
-
-    $nextSpent = max(0.0, (float) $budget['spent_amount'] - $delta);
-    $stmt = $pdo->prepare(
-        'UPDATE budgets
-         SET spent_amount = :spent_amount
-         WHERE id = :id AND user_id = :user_id'
-    );
-    $stmt->execute([
-        'spent_amount' => number_format($nextSpent, 2, '.', ''),
-        'id' => (int) $budget['id'],
-        'user_id' => $userId,
-    ]);
-}
-
 if ($method === 'GET') {
-    reset_monthly_budget_spend($pdo, $userId);
-
     $id = api_int_or_null($data['id'] ?? null);
 
     if ($id) {
@@ -222,13 +74,20 @@ if ($method === 'GET') {
             json_response(404, ['ok' => false, 'error' => 'Budget not found']);
         }
 
+        $budget = budget_refresh_spent($pdo, $userId, $budget);
+
         json_response(200, ['ok' => true, 'budget' => budget_payload($budget)]);
     }
 
     $stmt = $pdo->prepare('SELECT * FROM budgets WHERE user_id = :user_id ORDER BY id DESC');
     $stmt->execute(['user_id' => $userId]);
 
-    json_response(200, ['ok' => true, 'budgets' => array_map('budget_payload', $stmt->fetchAll())]);
+    $budgets = [];
+    foreach ($stmt->fetchAll() as $budget) {
+        $budgets[] = budget_payload(budget_refresh_spent($pdo, $userId, $budget));
+    }
+
+    json_response(200, ['ok' => true, 'budgets' => $budgets]);
 }
 
 if ($method === 'POST') {
@@ -259,9 +118,29 @@ if ($method === 'POST') {
         }
     }
 
+    $stmt = $pdo->prepare(
+        'SELECT id FROM budgets
+         WHERE user_id = :user_id AND category_id = :category_id
+         LIMIT 1'
+    );
+    $stmt->execute([
+        'user_id' => $userId,
+        'category_id' => $categoryId,
+    ]);
+
+    if ($stmt->fetch()) {
+        json_response(409, ['ok' => false, 'error' => 'Budget for this category already exists']);
+    }
+
     $effectivePeriod = api_text($data['period'] ?? null, 'monthly');
-    $startDate = api_date_or_null($data['startDate'] ?? $data['start_date'] ?? null) ?? date('Y-m-01');
-    $endDate = api_date_or_null($data['endDate'] ?? $data['end_date'] ?? null) ?? date('Y-m-t');
+    if (strtolower($effectivePeriod) === 'monthly') {
+        $bounds = budget_current_month_bounds();
+        $startDate = $bounds['start_date'];
+        $endDate = $bounds['end_date'];
+    } else {
+        $startDate = api_date_or_null($data['startDate'] ?? $data['start_date'] ?? null) ?? date('Y-m-01');
+        $endDate = api_date_or_null($data['endDate'] ?? $data['end_date'] ?? null) ?? date('Y-m-t');
+    }
 
     $stmt = $pdo->prepare(
         'INSERT INTO budgets (user_id, category_id, category_name, period, limit_amount, spent_amount, is_fixed, start_date, end_date)
@@ -273,7 +152,7 @@ if ($method === 'POST') {
         'category_name' => $category,
         'period' => $effectivePeriod,
         'limit_amount' => number_format($limit, 2, '.', ''),
-        'spent_amount' => number_format(api_float_or_null($data['spent'] ?? $data['spent_amount'] ?? null) ?? 0.0, 2, '.', ''),
+        'spent_amount' => number_format(0.0, 2, '.', ''),
         'is_fixed' => $isFixed ? 1 : 0,
         'start_date' => $startDate,
         'end_date' => $endDate,
@@ -283,7 +162,10 @@ if ($method === 'POST') {
     $stmt = $pdo->prepare('SELECT * FROM budgets WHERE id = :id AND user_id = :user_id LIMIT 1');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
 
-    json_response(201, ['ok' => true, 'budget' => budget_payload($stmt->fetch())]);
+    $budget = $stmt->fetch();
+    $budget = budget_refresh_spent($pdo, $userId, $budget);
+
+    json_response(201, ['ok' => true, 'budget' => budget_payload($budget)]);
 }
 
 if ($method === 'PUT') {
@@ -302,7 +184,6 @@ if ($method === 'PUT') {
 
     $category = api_text($data['category'] ?? $data['category_name'] ?? null, $existing['category_name']);
     $limit = api_float_or_null($data['limit'] ?? $data['limit_amount'] ?? null);
-    $spent = api_float_or_null($data['spent'] ?? $data['spent_amount'] ?? null);
     $isFixed = api_bool($data['isFixed'] ?? $data['is_fixed'] ?? null, (bool) (int) $existing['is_fixed']);
     if (isset($data['type']) && is_string($data['type'])) {
         $isFixed = strtolower(trim($data['type'])) === 'fixed';
@@ -320,9 +201,33 @@ if ($method === 'PUT') {
         }
     }
 
+    $targetCategoryId = $categoryId ?? ($existing['category_id'] === null ? null : (int) $existing['category_id']);
+    if ($targetCategoryId !== null) {
+        $stmt = $pdo->prepare(
+            'SELECT id FROM budgets
+             WHERE user_id = :user_id AND category_id = :category_id AND id <> :id
+             LIMIT 1'
+        );
+        $stmt->execute([
+            'user_id' => $userId,
+            'category_id' => $targetCategoryId,
+            'id' => $id,
+        ]);
+
+        if ($stmt->fetch()) {
+            json_response(409, ['ok' => false, 'error' => 'Budget for this category already exists']);
+        }
+    }
+
     $effectivePeriod = api_text($data['period'] ?? null, $existing['period']);
-    $startDate = api_date_or_null($data['startDate'] ?? $data['start_date'] ?? null) ?? ($existing['start_date'] ?: date('Y-m-01'));
-    $endDate = api_date_or_null($data['endDate'] ?? $data['end_date'] ?? null) ?? ($existing['end_date'] ?: date('Y-m-t'));
+    if (strtolower($effectivePeriod) === 'monthly') {
+        $bounds = budget_current_month_bounds();
+        $startDate = $bounds['start_date'];
+        $endDate = $bounds['end_date'];
+    } else {
+        $startDate = api_date_or_null($data['startDate'] ?? $data['start_date'] ?? null) ?? ($existing['start_date'] ?: date('Y-m-01'));
+        $endDate = api_date_or_null($data['endDate'] ?? $data['end_date'] ?? null) ?? ($existing['end_date'] ?: date('Y-m-t'));
+    }
 
     $stmt = $pdo->prepare(
         'UPDATE budgets
@@ -341,7 +246,7 @@ if ($method === 'PUT') {
         'category_name' => $category,
         'period' => $effectivePeriod,
         'limit_amount' => number_format($limit ?? (float) $existing['limit_amount'], 2, '.', ''),
-        'spent_amount' => number_format($spent ?? (float) $existing['spent_amount'], 2, '.', ''),
+        'spent_amount' => number_format((float) $existing['spent_amount'], 2, '.', ''),
         'is_fixed' => $isFixed ? 1 : 0,
         'start_date' => $startDate,
         'end_date' => $endDate,
@@ -352,7 +257,10 @@ if ($method === 'PUT') {
     $stmt = $pdo->prepare('SELECT * FROM budgets WHERE id = :id AND user_id = :user_id LIMIT 1');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
 
-    json_response(200, ['ok' => true, 'budget' => budget_payload($stmt->fetch())]);
+    $budget = $stmt->fetch();
+    $budget = budget_refresh_spent($pdo, $userId, $budget);
+
+    json_response(200, ['ok' => true, 'budget' => budget_payload($budget)]);
 }
 
 if ($method === 'DELETE') {
