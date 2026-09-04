@@ -29,6 +29,38 @@ test("прогнозата започва от следващия месец", (
   assert.equal(projection.points[0].label, new Intl.DateTimeFormat("bg-BG", { month: "short", year: "2-digit" }).format(new Date(2026, 8, 1)));
 });
 
+test("редовна заплата от 5-о число остава активна през текущия месец", () => {
+  const referenceDate = new Date(2026, 8, 4);
+  const transactions = [
+    { date: "2026-04-05T00:00:00.000Z", amount: 2950, type: "income", category: "Заплата", title: "Заплата" },
+    { date: "2026-05-05T00:00:00.000Z", amount: 2950, type: "income", category: "Заплата", title: "Заплата" },
+    { date: "2026-06-05T00:00:00.000Z", amount: 2950, type: "income", category: "Заплата", title: "Заплата" },
+    { date: "2026-07-05T00:00:00.000Z", amount: 3000, type: "income", category: "Заплата", title: "Заплата" },
+    { date: "2026-08-05T00:00:00.000Z", amount: 3000, type: "income", category: "Заплата", title: "Заплата" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, referenceDate);
+  const salary = baseline.recurringIncomes.filter((item) => item.category === "Заплата");
+
+  assert.equal(salary.length, 1);
+  assert.equal(salary[0].occurrences, 5);
+  assert.equal(salary[0].category, "Заплата");
+  assert.equal(salary[0].amount, 3000);
+  assert.ok(salary[0].confidence > 0);
+});
+
+test("група с последна поява > 45 дни преди текущия месец не се приема за активна", () => {
+  const referenceDate = new Date(2026, 8, 4);
+  const transactions = [
+    { date: "2026-04-05T00:00:00.000Z", amount: 1200, type: "income", category: "Печалба", title: "Допълнителен доход" },
+    { date: "2026-05-05T00:00:00.000Z", amount: 1200, type: "income", category: "Печалба", title: "Допълнителен доход" },
+    { date: "2026-06-05T00:00:00.000Z", amount: 1200, type: "income", category: "Печалба", title: "Допълнителен доход" },
+  ];
+
+  const baseline = buildFinancialTwinBaseline(transactions, referenceDate);
+  assert.equal(baseline.recurringIncomes.some((item) => item.category === "Печалба"), false);
+});
+
 test("неактивен портфейл не участва в началния баланс", () => {
   const startBalance = [
     { balance: 1000, isActive: true },
@@ -52,8 +84,8 @@ test("две повторения не са периодична операци�
 
 test("три повторения през 21–45 дни са периодична операция", () => {
   const transactions = [
-    { date: new Date(2026, 3, 10).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
-    { date: new Date(2026, 4, 30).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 4, 15).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 5, 18).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
     { date: new Date(2026, 6, 20).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
   ];
 
@@ -74,12 +106,12 @@ test("интервал под 21 или над 45 дни не се приема"
 
 test("еднаква категория с различно описание не се смесва", () => {
   const transactions = [
-    { date: monthDate(5), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
-    { date: monthDate(4), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
-    { date: monthDate(3), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
-    { date: monthDate(2), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
-    { date: monthDate(1), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
-    { date: monthDate(0), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
+    { date: new Date(2026, 4, 15).toISOString(), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 5, 18).toISOString(), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 6, 22).toISOString(), amount: 45, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 4, 18).toISOString(), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
+    { date: new Date(2026, 5, 20).toISOString(), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
+    { date: new Date(2026, 6, 23).toISOString(), amount: 60, type: "expense", category: "Абонаменти", title: "YouTube" },
   ];
 
   const baseline = buildFinancialTwinBaseline(transactions, NOW);
@@ -166,9 +198,9 @@ test("еднократен разход не става постоянен", () 
 
 test("периодичен разход не се отчита повторно като променлив", () => {
   const transactions = [
-    { date: monthDate(5), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
-    { date: monthDate(4), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
-    { date: monthDate(3), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 4, 15).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 5, 19).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
+    { date: new Date(2026, 6, 24).toISOString(), amount: 50, type: "expense", category: "Абонаменти", title: "Netflix" },
   ];
 
   const baseline = buildFinancialTwinBaseline(transactions, NOW);

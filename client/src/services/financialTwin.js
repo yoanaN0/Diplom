@@ -107,7 +107,6 @@ function isSavingsLikeTransaction(entry) {
 function detectRecurringTransactions(transactions, now = new Date()) {
   const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const historyStart = new Date(now.getFullYear(), now.getMonth() - HISTORY_MONTHS, 1);
-  const forecastStart = getProjectionStartDate(now);
   const groups = new Map();
 
   transactions.forEach((entry) => {
@@ -115,7 +114,7 @@ function detectRecurringTransactions(transactions, now = new Date()) {
 
     const date = toDate(entry.date);
     const amount = normalizeAmount(entry);
-    if (!date || !Number.isFinite(amount) || amount <= 0 || date < historyStart || date > now) {
+    if (!date || !Number.isFinite(amount) || amount <= 0 || date < historyStart || date >= currentMonthStart || date > now) {
       return;
     }
 
@@ -168,12 +167,13 @@ function detectRecurringTransactions(transactions, now = new Date()) {
         intervals.push(interval);
       }
 
-      if (intervals.some((interval) => interval < 21 || interval > 120)) {
+      if (intervals.some((interval) => interval < 21 || interval > RECURRING_ACTIVE_DAYS)) {
         return;
       }
 
       const lastOccurrence = sorted[sorted.length - 1].date;
-      if (lastOccurrence > now) {
+      const daysSinceLastOccurrence = daysBetween(lastOccurrence, currentMonthStart);
+      if (lastOccurrence > now || daysSinceLastOccurrence > RECURRING_ACTIVE_DAYS) {
         return;
       }
 
@@ -217,7 +217,7 @@ function detectRecurringTransactions(transactions, now = new Date()) {
 
  
 const HISTORY_MONTHS = 6;
-const RECURRING_ACTIVE_DAYS = 120;
+const RECURRING_ACTIVE_DAYS = 45;
 
 function buildMonthKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;

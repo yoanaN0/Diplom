@@ -43,14 +43,14 @@ function addMonths(baseDate, offset) {
 }
 
 function offsetLabel(offset, startDate) {
-  const date = addMonths(startDate, offset);
+  const date = addMonths(startDate, offset + 1);
   const monthLabel = new Intl.DateTimeFormat("bg-BG", {
     month: "long",
     year: "numeric",
   }).format(date);
 
   if (offset === 0) {
-    return `Текущ месец (${monthLabel})`;
+    return `Следващ месец (${monthLabel})`;
   }
 
   if (offset === 1) {
@@ -214,10 +214,7 @@ function buildRecurringExpenseItems(baseline) {
 function FinancialTwin() {
   const { transactions, loading, error } = useTransactions();
   const [draft, setDraft] = useState(initialDraft);
-  const [projectionStartDate] = useState(() => {
-    const today = new Date();
-    return new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  });
+  const [projectionReferenceDate] = useState(() => new Date());
   const [wallets, setWallets] = useState([]);
   const [savedScenarios, setSavedScenarios] = useState([]);
   const [scenarioName, setScenarioName] = useState("");
@@ -317,8 +314,8 @@ function FinancialTwin() {
   const horizonMonths = Math.max(1, Number(draft.horizon) || 12);
 
   const offsetOptions = useMemo(() => {
-    return buildOffsetOptions(horizonMonths, projectionStartDate);
-  }, [horizonMonths, projectionStartDate]);
+    return buildOffsetOptions(horizonMonths, projectionReferenceDate);
+  }, [horizonMonths, projectionReferenceDate]);
 
   const updateHorizon = (value) => {
     const nextHorizon = Math.max(1, Number(value) || 12);
@@ -602,10 +599,10 @@ function FinancialTwin() {
       startBalance: currentBalance,
       baseline,
       months: horizonMonths,
-      startDate: projectionStartDate,
+      startDate: projectionReferenceDate,
       modifiers: scenarioModifiers,
     });
-  }, [baseline, currentBalance, horizonMonths, projectionStartDate, scenarioModifiers]);
+  }, [baseline, currentBalance, horizonMonths, projectionReferenceDate, scenarioModifiers]);
 
   const insufficientHistory = baseline?.insufficientHistory === true;
 
@@ -670,7 +667,7 @@ function FinancialTwin() {
       lines.push(
         `Еднократна покупка: -${formatEur(scenarioModifiers.oneTimeExpense.amount)} · ${offsetLabel(
           scenarioModifiers.oneTimeExpense.month,
-          projectionStartDate,
+          projectionReferenceDate,
         )}`,
       );
     }
@@ -679,7 +676,7 @@ function FinancialTwin() {
       lines.push(
         `Еднократен доход: +${formatEur(scenarioModifiers.oneTimeIncome.amount)} · ${offsetLabel(
           scenarioModifiers.oneTimeIncome.month,
-          projectionStartDate,
+          projectionReferenceDate,
         )}`,
       );
     }
@@ -705,7 +702,7 @@ function FinancialTwin() {
       lines.push(
         `Намаляване ${categoryLabel}: +${formatEur(savedPerMonth)} / месец (${scenarioModifiers.spendingCut.percent}%) · ${offsetLabel(
           scenarioModifiers.spendingCut.startMonth,
-          projectionStartDate,
+          projectionReferenceDate,
         )}`,
       );
     }
@@ -715,7 +712,7 @@ function FinancialTwin() {
       lines.push(
         `Промяна в доход: ${sign}${formatEur(scenarioModifiers.incomeChange.amount)} / месец · ${offsetLabel(
           scenarioModifiers.incomeChange.startMonth,
-          projectionStartDate,
+          projectionReferenceDate,
         )}`,
       );
     }
@@ -730,13 +727,13 @@ function FinancialTwin() {
       lines.push(
         `Кредит: +${formatEur(scenarioModifiers.loan.principal)} еднократно · -${formatEur(payment)} / месец за ${scenarioModifiers.loan.months} месеца · ${offsetLabel(
           scenarioModifiers.loan.startMonth,
-          projectionStartDate,
+          projectionReferenceDate,
         )}`,
       );
     }
 
     return lines;
-  }, [baseline.variableExpenses, projectionStartDate, scenarioModifiers]);
+  }, [baseline.variableExpenses, projectionReferenceDate, scenarioModifiers]);
 
   return (
     <div className="finance-page twin-page">
