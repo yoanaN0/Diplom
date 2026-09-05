@@ -1730,7 +1730,31 @@ code,
 }
 
 .twin-chart-labels {
-  grid-template-columns: repeat(auto-fit, minmax(54px, 1fr));
+  grid-template-columns:
+    repeat(var(--twin-label-count, 12), minmax(0, 1fr));
+  gap: 0;
+  min-height: 22px;
+}
+
+.twin-chart-labels span {
+  min-width: 0;
+  text-align: center;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.twin-chart-labels span:first-child {
+  text-align: left;
+}
+
+.twin-chart-labels span:last-child {
+  text-align: right;
+}
+
+@media (max-width: 720px) {
+  .twin-chart-labels span {
+    font-size: 0.62rem;
+  }
 }
 
 .twin-recurring-grid {

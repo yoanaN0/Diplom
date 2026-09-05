@@ -808,7 +808,7 @@ function FinancialTwin() {
                 value={draft.horizon}
                 onChange={(event) => updateHorizon(event.target.value)}
               >
-                {[1, 3, 6, 12, 18, 24].map((value) => (
+                {[ 6, 12, 18, 24].map((value) => (
                   <option key={value} value={value}>{value}</option>
                 ))}
               </select>
@@ -1091,8 +1091,10 @@ function FinancialTwin() {
                             );
                           })
                         ) : (
-                          <span className="muted">Няма налични категории за намаляване.</span>
-                        )}
+<span className="muted">
+  Няма достатъчно исторически разходи по категории.
+  Категориите ще се появят след добавяне на разходи за предишни завършени месеци.
+</span>                        )}
                       </div>
                     </label>
 
@@ -1219,8 +1221,11 @@ function FinancialTwin() {
                           );
                         })
                       ) : (
-                        <span className="muted">Избери категории, за да настроиш отделни правила.</span>
-                      )}
+<span className="muted">
+  {variableCategories.length > 0
+    ? "Избери категории, за да настроиш отделни правила."
+    : "Отделни правила могат да се зададат след натрупване на исторически разходи."}
+</span>                      )}
                     </div>
                   </fieldset>
                 </article>
@@ -1408,11 +1413,29 @@ function FinancialTwin() {
               ))}
             </svg>
 
-            <div className="chart-labels twin-chart-labels">
-              {chartModel.labels.map((label) => (
-                <span key={label}>{label}</span>
-              ))}
-            </div>
+          <div
+  className="chart-labels twin-chart-labels"
+  style={{ "--twin-label-count": chartModel.labels.length }}
+>
+  {chartModel.labels.map((label, index, labels) => {
+    const step =
+      labels.length <= 6
+        ? 1
+        : labels.length <= 12
+          ? 2
+          : 3;
+
+    const isVisible =
+      index % step === 0 ||
+      index === labels.length - 1;
+
+    return (
+      <span key={`${label}-${index}`}>
+        {isVisible ? label : ""}
+      </span>
+    );
+  })}
+</div>
 
             <div className="twin-breakdown" aria-label="Обяснение на сценария">
               <h3>Какво движи резултата</h3>

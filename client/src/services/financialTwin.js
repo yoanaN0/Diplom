@@ -80,10 +80,13 @@ function calculateAnnuityPayment(principal, annualRatePercent, months) {
 }
 
 function createMonthLabel(date) {
-  return new Intl.DateTimeFormat("bg-BG", {
-    month: "short",
-    year: "2-digit",
-  }).format(date);
+  const months = [
+    "яну", "фев", "мар", "апр",
+    "май", "юни", "юли", "авг",
+    "сеп", "окт", "ное", "дек",
+  ];
+
+  return `${months[date.getMonth()]} ${date.getFullYear()}`;
 }
 
 function getProjectionStartDate(now = new Date()) {
