@@ -3094,6 +3094,7 @@ code,
 .profile-layout {
   grid-template-columns: 320px 1fr;
   align-items: start;
+  gap: 24px;
 }
 
 .profile-summary-card {
@@ -3152,6 +3153,18 @@ code,
 
 .profile-security-card {
   grid-column: 1 / -1;
+}
+
+.settings-page .finance-header.profile-header {
+  margin-bottom: 24px;
+}
+
+.settings-page .filter-grid {
+  gap: 18px;
+}
+
+.settings-page form.surface-card .button {
+  margin-top: 20px;
 }
 
 .profile-security-panel {

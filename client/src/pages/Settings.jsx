@@ -12,6 +12,13 @@ function Settings() {
 			email: localUser?.email || "",
 		};
 	});
+	const [originalProfile, setOriginalProfile] = useState(() => {
+		const localUser = getSessionUser();
+		return {
+			firstName: localUser?.firstName || "",
+			lastName: localUser?.lastName || "",
+		};
+	});
 	const [profileError, setProfileError] = useState("");
 	const [profileSaved, setProfileSaved] = useState(false);
 
@@ -23,13 +30,18 @@ function Settings() {
 				return;
 			}
 
-			setProfileError("");
-			setProfile((current) => ({
-				...current,
+			const nextProfile = {
 				firstName: result.user.firstName || "",
 				lastName: result.user.lastName || "",
 				email: result.user.email || "",
-			}));
+			};
+
+			setProfileError("");
+			setProfile(nextProfile);
+			setOriginalProfile({
+				firstName: result.user.firstName || "",
+				lastName: result.user.lastName || "",
+			});
 		};
 
 		void loadFreshUser();
@@ -45,6 +57,11 @@ function Settings() {
 		try {
 			await saveProfileRequest(profile);
 			await fetchSessionUser();
+			const nextOriginal = {
+				firstName: profile.firstName,
+				lastName: profile.lastName,
+			};
+			setOriginalProfile(nextOriginal);
 			setProfileError("");
 			setProfileSaved(true);
 		} catch {
@@ -56,6 +73,8 @@ function Settings() {
 	const fullName = `${profile.firstName} ${profile.lastName}`.trim() || "Потребител";
 	const initials =
 		`${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}`.trim().toUpperCase() || "U";
+	const hasProfileChanges =
+		profile.firstName !== originalProfile.firstName || profile.lastName !== originalProfile.lastName;
 
 	return (
 		<div className="finance-page settings-page">
@@ -113,9 +132,11 @@ function Settings() {
 						</label>
 					</div>
 
-					<button type="submit" className="button button--primary">
-						Запази промените
-					</button>
+					{hasProfileChanges ? (
+						<button type="submit" className="button button--primary">
+							Запази промените
+						</button>
+					) : null}
 				</form>
 			</section>
 		</div>
