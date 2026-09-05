@@ -72,9 +72,7 @@ function Login() {
               <span>Запомни ме</span>
             </label>
 
-            <a href="#" onClick={(event) => event.preventDefault()}>
-              Забравена парола?
-            </a>
+            <Link to="/forgot-password">Забравена парола?</Link>
           </div>
 
           <p className="auth-card__feedback" data-auth-feedback />
