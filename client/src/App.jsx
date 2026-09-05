@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
@@ -21,6 +21,16 @@ import FinancialTwin from "./pages/FinancialTwin";
 import Admin from "./pages/Admin";
 
 import { isAdmin, isAuthenticated, syncAuthState } from "./services/authStorage";
+
+function ScrollToTop() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [pathname]);
+
+  return null;
+}
 
 function ProtectedRoute({ children }) {
   return isAuthenticated() ? children : <Navigate to="/login" replace />;
@@ -61,6 +71,7 @@ function App() {
   if (!authReady) {
     return (
       <BrowserRouter>
+        <ScrollToTop />
         <div className="app-shell">
           <Navbar />
           <main className="app-main">
@@ -75,6 +86,7 @@ function App() {
 
   return (
     <BrowserRouter>
+      <ScrollToTop />
       <div className="app-shell">
         <Navbar />
 
