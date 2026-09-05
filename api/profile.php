@@ -57,49 +57,16 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET') {
 $input = read_json_body();
 $firstName = trim((string) ($input['firstName'] ?? ''));
 $lastName = trim((string) ($input['lastName'] ?? ''));
-$email = mb_strtolower(trim((string) ($input['email'] ?? '')));
-$phone = trim((string) ($input['phone'] ?? ''));
-$birthDate = trim((string) ($input['birthDate'] ?? ''));
-$city = trim((string) ($input['city'] ?? ''));
-$country = trim((string) ($input['country'] ?? 'България'));
 
-if ($firstName === '' || $lastName === '' || $email === '') {
-    json_response(422, ['ok' => false, 'error' => 'Името, фамилията и имейлът са задължителни.']);
+if ($firstName === '' || $lastName === '') {
+    json_response(422, ['ok' => false, 'error' => 'Името и фамилията са задължителни.']);
 }
 
-if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    json_response(422, ['ok' => false, 'error' => 'Невалиден имейл адрес.']);
-}
-
-$checkStmt = $pdo->prepare('SELECT id FROM users WHERE email = :email AND id <> :id LIMIT 1');
-$checkStmt->execute(['email' => $email, 'id' => $userId]);
-if ($checkStmt->fetch()) {
-    json_response(409, ['ok' => false, 'error' => 'Потребител с този имейл вече съществува.']);
-}
-
-$updateUser = $pdo->prepare('UPDATE users SET first_name = :first_name, last_name = :last_name, email = :email WHERE id = :id');
+$updateUser = $pdo->prepare('UPDATE users SET first_name = :first_name, last_name = :last_name WHERE id = :id');
 $updateUser->execute([
     'first_name' => $firstName,
     'last_name' => $lastName,
-    'email' => $email,
     'id' => $userId,
-]);
-
-$updateProfile = $pdo->prepare(
-    'INSERT INTO user_profiles (user_id, phone, birth_date, city, country)
-     VALUES (:user_id, :phone, :birth_date, :city, :country)
-     ON DUPLICATE KEY UPDATE
-        phone = VALUES(phone),
-        birth_date = VALUES(birth_date),
-        city = VALUES(city),
-        country = VALUES(country)'
-);
-$updateProfile->execute([
-    'user_id' => $userId,
-    'phone' => $phone !== '' ? $phone : null,
-    'birth_date' => $birthDate !== '' ? $birthDate : null,
-    'city' => $city !== '' ? $city : null,
-    'country' => $country !== '' ? $country : 'България',
 ]);
 
 $user = load_profile($pdo, $userId);
