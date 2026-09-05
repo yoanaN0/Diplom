@@ -25,9 +25,9 @@ const initialDraft = {
   incomeAmount: "",
   incomeStart: "0",
   purchaseAmount: "",
-  purchaseMonth: "1",
+  purchaseMonth: "0",
   oneTimeIncomeAmount: "",
-  oneTimeIncomeMonth: "1",
+  oneTimeIncomeMonth: "0",
   loanPrincipal: "",
   loanRate: "6",
   loanMonths: "24",
@@ -50,14 +50,10 @@ function offsetLabel(offset, startDate) {
   }).format(date);
 
   if (offset === 0) {
-    return `Следващ месец (${monthLabel})`;
+    return `${monthLabel} — следващ месец`;
   }
 
-  if (offset === 1) {
-    return `След 1 месец (${monthLabel})`;
-  }
-
-  return `След ${offset} месеца (${monthLabel})`;
+  return monthLabel;
 }
 
 function buildOffsetOptions(horizon, startDate) {
@@ -118,6 +114,15 @@ function normalizeSavedDraft(rawDraft) {
     ? source.cutCategories.filter(Boolean)
     : [];
 
+  const clampMonth = (value) => {
+    const monthValue = Number(value);
+    if (!Number.isFinite(monthValue)) {
+      return "0";
+    }
+
+    return String(Math.max(0, Math.min(monthValue, maxOffset)));
+  };
+
   return {
     ...initialDraft,
     ...source,
@@ -127,28 +132,28 @@ function normalizeSavedDraft(rawDraft) {
     enableOneTimeIncome: Boolean(source.enableOneTimeIncome),
     enableLoan: Boolean(source.enableLoan),
     enableSpendingCut: Boolean(source.enableSpendingCut),
-    incomeStart: String(Math.min(Number(source.incomeStart) || 0, maxOffset)),
-    purchaseMonth: String(Math.min(Number(source.purchaseMonth) || 0, maxOffset)),
-    oneTimeIncomeMonth: String(Math.min(Number(source.oneTimeIncomeMonth) || 0, maxOffset)),
-    loanStart: String(Math.min(Number(source.loanStart) || 0, maxOffset)),
-    cutStart: String(Math.min(Number(source.cutStart) || 0, maxOffset)),
+    incomeStart: clampMonth(source.incomeStart),
+    purchaseMonth: clampMonth(source.purchaseMonth),
+    oneTimeIncomeMonth: clampMonth(source.oneTimeIncomeMonth),
+    loanStart: clampMonth(source.loanStart),
+    cutStart: clampMonth(source.cutStart),
     cutCategories,
     cutRules: Array.isArray(source.cutRules)
       ? source.cutRules
           .filter((rule) => rule && typeof rule === "object")
           .map((rule) => {
-            const start = Math.min(Number(rule.startMonth) || 0, maxOffset);
+            const start = Number(clampMonth(rule.startMonth));
             const rawEndMonth = rule.endMonth;
             const endMonthValue = rawEndMonth === "" || rawEndMonth === null || rawEndMonth === undefined
-              ? null
-              : Number(rawEndMonth);
-            const hasEnd = Number.isFinite(endMonthValue) && endMonthValue >= start;
+              ? ""
+              : clampMonth(rawEndMonth);
+            const finalEnd = endMonthValue !== "" && Number(endMonthValue) < start ? "" : endMonthValue;
 
             return {
               category: String(rule.category || "").trim(),
               percent: String(rule.percent ?? source.cutPercent ?? "10"),
               startMonth: String(start),
-              endMonth: hasEnd ? String(Math.min(endMonthValue, maxOffset)) : "",
+              endMonth: finalEnd,
             };
           })
           .filter((rule) => rule.category !== "")
@@ -321,32 +326,74 @@ function FinancialTwin() {
     const nextHorizon = Math.max(1, Number(value) || 12);
     const maxOffset = nextHorizon - 1;
 
-    setDraft((current) => ({
-      ...current,
-      horizon: String(nextHorizon),
-      incomeStart: String(Math.min(Number(current.incomeStart) || 0, maxOffset)),
-      purchaseMonth: String(Math.min(Number(current.purchaseMonth) || 0, maxOffset)),
-      loanStart: String(Math.min(Number(current.loanStart) || 0, maxOffset)),
-      cutStart: String(Math.min(Number(current.cutStart) || 0, maxOffset)),
-    }));
+    const clampMonth = (itemValue) => {
+      const monthValue = Number(itemValue);
+      if (!Number.isFinite(monthValue)) {
+        return "0";
+      }
+
+      return String(Math.max(0, Math.min(monthValue, maxOffset)));
+    };
+
+    setDraft((current) => {
+      const nextCutRules = (Array.isArray(current.cutRules) ? current.cutRules : []).map((rule) => {
+        const start = clampMonth(rule.startMonth);
+        const rawEnd = rule.endMonth;
+        const end = rawEnd === "" || rawEnd === null || rawEnd === undefined
+          ? ""
+          : clampMonth(rawEnd);
+        const normalizedEnd = end !== "" && Number(start) > Number(end) ? "" : end;
+
+        return {
+          ...rule,
+          startMonth: start,
+          endMonth: normalizedEnd,
+        };
+      });
+
+      return {
+        ...current,
+        horizon: String(nextHorizon),
+        incomeStart: clampMonth(current.incomeStart),
+        purchaseMonth: clampMonth(current.purchaseMonth),
+        oneTimeIncomeMonth: clampMonth(current.oneTimeIncomeMonth),
+        loanStart: clampMonth(current.loanStart),
+        cutStart: clampMonth(current.cutStart),
+        cutRules: nextCutRules,
+      };
+    });
   };
 
   const updateCutRule = (category, updates) => {
     setDraft((current) => {
       const currentRules = Array.isArray(current.cutRules) ? current.cutRules : [];
       const existingRule = currentRules.find((rule) => rule.category === category);
+      const baseRule = {
+        category,
+        percent: current.cutPercent || "10",
+        startMonth: current.cutStart || "0",
+        endMonth: "",
+        ...(existingRule || {}),
+        ...updates,
+      };
+
+      const startValue = Number.isFinite(Number(baseRule.startMonth)) ? Number(baseRule.startMonth) : 0;
+      const endValueRaw = baseRule.endMonth;
+      const endValue = endValueRaw === "" || endValueRaw === null || endValueRaw === undefined
+        ? ""
+        : Number(endValueRaw);
+      const normalizedEnd = Number.isFinite(endValue) && endValue < startValue ? "" :
+        (Number.isFinite(endValue) ? String(endValue) : "");
+
+      const nextRule = {
+        ...baseRule,
+        startMonth: String(startValue),
+        endMonth: normalizedEnd,
+      };
+
       const nextRules = existingRule
-        ? currentRules.map((rule) => (rule.category === category ? { ...rule, ...updates } : rule))
-        : [
-            ...currentRules,
-            {
-              category,
-              percent: current.cutPercent || "10",
-              startMonth: current.cutStart || "0",
-              endMonth: "",
-              ...updates,
-            },
-          ];
+        ? currentRules.map((rule) => (rule.category === category ? nextRule : rule))
+        : [...currentRules, nextRule];
 
       return {
         ...current,
@@ -1155,7 +1202,7 @@ function FinancialTwin() {
                                           updateCutRule(category, { endMonth: event.target.value })
                                         }
                                       >
-                                        <option value="">Край на избрания период</option>
+                                        <option value="">До края на прогнозата</option>
                                         {offsetOptions
                                           .filter((option) => Number(option.value) >= Number(rule.startMonth ?? 0))
                                           .map((option) => (
