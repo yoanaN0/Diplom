@@ -495,7 +495,7 @@ function Transactions() {
 		<div className="finance-page transactions-page">
 			<section className="finance-header">
 				<div>
-					<h1>Тразнакции</h1>
+					<h1>Транзакции</h1>
 					<p>Хронологичен списък с филтриране, търсене и редакция.</p>
 				</div>
 			</section>

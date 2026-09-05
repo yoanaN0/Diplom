@@ -71,7 +71,7 @@ function Dashboard() {
 				setBudgets(budgets);
 				setDashboard(calculateDashboardData(nextTransactions, goals, budgets, totalBalance, period));
 			} catch {
-				setError("Неуспешно зареждане на dashboard данните.");
+				setError("Неуспешно зареждане на данните за таблото.");
 			} finally {
 				setLoading(false);
 			}

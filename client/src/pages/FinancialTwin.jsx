@@ -789,7 +789,7 @@ function FinancialTwin() {
           <h1>Сценарии</h1>
           <p>
             Сравнявай базовата прогноза с "Какво ако" сценарии за следващите
-            1-24 месеца, без да променяш реалните си данни.
+            6-24 месеца, без да променяш реалните си данни.
           </p>
         </div>
       </section>
@@ -1479,7 +1479,7 @@ function FinancialTwin() {
             <article>
               <h3>Приходи</h3>
               <div className="session-list">
-                {baseline.recurringIncomes.length === 0 ? <p className="muted">Няма открити recurring приходи.</p> : null}
+                {baseline.recurringIncomes.length === 0 ? <p className="muted">Няма открити периодични приходи.</p> : null}
                 {baseline.recurringIncomes.map((item) => (
                   <div key={item.key}>
                     <strong>{item.title}</strong>

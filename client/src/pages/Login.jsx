@@ -49,7 +49,7 @@ function Login() {
         <p className="section-heading__eyebrow">Вход</p>
         <h1 className="auth-hero__title">Влез в профила си</h1>
         <p>
-          Достъпвай dashboard-а, проследявай финансите си и виж препоръките на
+          Достъпвай таблото, проследявай финансите си и виж препоръките на
           Finly за по-умно управление на парите.
         </p>
       </section>
