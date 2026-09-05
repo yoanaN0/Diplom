@@ -125,7 +125,7 @@ export function calculateSpendingPaceIndicator(spentSoFar, totalLimit, daysElaps
     return { visible: false, emoji: null, label: null, paceRatio: null };
   }
 
-  if (daysElapsed < 3 || daysInMonth <= 0) {
+  if (totalLimit <= 0 || daysElapsed < 3 || daysInMonth <= 0) {
     return { visible: false, emoji: null, label: null, paceRatio: null };
   }
 
