@@ -173,6 +173,22 @@ if ($method === 'DELETE') {
         json_response(403, ['ok' => false, 'error' => 'Builtin categories cannot be deleted']);
     }
 
+    $transactionCheck = $pdo->prepare(
+        'SELECT COUNT(*) FROM transactions WHERE user_id = :user_id AND category_id = :category_id LIMIT 1'
+    );
+    $transactionCheck->execute(['user_id' => $userId, 'category_id' => $id]);
+    if ((int) $transactionCheck->fetchColumn() > 0) {
+        json_response(409, ['ok' => false, 'error' => 'Тази категория се използва в транзакции и не може да бъде изтрита.']);
+    }
+
+    $budgetCheck = $pdo->prepare(
+        'SELECT COUNT(*) FROM budgets WHERE user_id = :user_id AND category_id = :category_id LIMIT 1'
+    );
+    $budgetCheck->execute(['user_id' => $userId, 'category_id' => $id]);
+    if ((int) $budgetCheck->fetchColumn() > 0) {
+        json_response(409, ['ok' => false, 'error' => 'Тази категория се използва в бюджети и не може да бъде изтрита.']);
+    }
+
     $stmt = $pdo->prepare('DELETE FROM categories WHERE id = :id AND user_id = :user_id');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
 

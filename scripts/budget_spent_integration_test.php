@@ -297,12 +297,109 @@ try {
     ]);
     assert_true((int) $duplicateBudget['status'] === 409, '11) Duplicate budget by category should return 409');
 
+    $newCategoryBudget = run_api(__DIR__ . '/../api/budgets.php', 'POST', $userId, [
+        'category' => 'Нов разход',
+        'limit' => 250,
+        'period' => 'monthly',
+    ]);
+    assert_true((int) $newCategoryBudget['status'] === 201, '12) New expense category should be created and attached to budget');
+    $newCategoryId = (int) ($newCategoryBudget['body']['budget']['categoryId'] ?? 0);
+    assert_true($newCategoryId > 0, '12) Created budget should get categoryId for the new expense category');
+
+    $categoryRow = $pdo->prepare('SELECT category_type, user_id FROM categories WHERE id = :id LIMIT 1');
+    $categoryRow->execute(['id' => $newCategoryId]);
+    $categoryRowData = $categoryRow->fetch();
+    assert_true((string) ($categoryRowData['category_type'] ?? '') === 'expense', '12) New category must be created as expense category');
+    assert_true((int) ($categoryRowData['user_id'] ?? 0) === $userId, '12) New category must belong to the current user');
+
+    $foreignUserId = 0;
+    $foreignUserEmail = 'budget-spent-foreign+' . bin2hex(random_bytes(4)) . '@example.com';
+    $insertForeignUser = $pdo->prepare(
+        'INSERT INTO users (first_name, last_name, email, password_hash)
+         VALUES (:first_name, :last_name, :email, :password_hash)'
+    );
+    $insertForeignUser->execute([
+        'first_name' => 'Foreign',
+        'last_name' => 'Tester',
+        'email' => $foreignUserEmail,
+        'password_hash' => $passwordHash,
+    ]);
+    $foreignUserId = (int) $pdo->lastInsertId();
+
+    $pdo->prepare('INSERT INTO user_profiles (user_id, country) VALUES (:user_id, :country)')
+        ->execute(['user_id' => $foreignUserId, 'country' => 'BG']);
+
+    $foreignIncomeCategory = $pdo->prepare(
+        'INSERT INTO categories (user_id, name, category_type, is_builtin)
+         VALUES (:user_id, :name, :category_type, 0)'
+    );
+    $foreignIncomeCategory->execute(['user_id' => $foreignUserId, 'name' => 'Income Foreign', 'category_type' => 'income']);
+    $foreignIncomeCategoryId = (int) $pdo->lastInsertId();
+
+    $invalidIncomeBudget = run_api(__DIR__ . '/../api/budgets.php', 'POST', $userId, [
+        'category' => 'Income Foreign',
+        'categoryId' => $foreignIncomeCategoryId,
+        'limit' => 150,
+        'period' => 'monthly',
+    ]);
+    assert_true((int) $invalidIncomeBudget['status'] === 422 || (int) $invalidIncomeBudget['status'] === 404, '13) Income or foreign category should be rejected');
+
+    $foreignExpenseCategory = $pdo->prepare(
+        'INSERT INTO categories (user_id, name, category_type, is_builtin)
+         VALUES (:user_id, :name, :category_type, 0)'
+    );
+    $foreignExpenseCategory->execute(['user_id' => $foreignUserId, 'name' => 'Foreign Food', 'category_type' => 'expense']);
+    $foreignExpenseCategoryId = (int) $pdo->lastInsertId();
+
+    $invalidForeignBudget = run_api(__DIR__ . '/../api/budgets.php', 'POST', $userId, [
+        'category' => 'Foreign Food',
+        'categoryId' => $foreignExpenseCategoryId,
+        'limit' => 175,
+        'period' => 'monthly',
+    ]);
+    assert_true((int) $invalidForeignBudget['status'] === 404, '14) Foreign category should be rejected with 404');
+
+    $moveTargetCategory = $pdo->prepare(
+        'INSERT INTO categories (user_id, name, category_type, is_builtin)
+         VALUES (:user_id, :name, :category_type, 0)'
+    );
+    $moveTargetCategory->execute(['user_id' => $userId, 'name' => 'Move Target', 'category_type' => 'expense']);
+    $moveTargetCategoryId = (int) $pdo->lastInsertId();
+
+    $renameBudget = run_api(__DIR__ . '/../api/budgets.php', 'PUT', $userId, [
+        'id' => $foodBudgetId,
+        'categoryId' => $moveTargetCategoryId,
+        'category' => 'Move Target',
+        'limit' => 600,
+        'isFixed' => false,
+        'period' => 'monthly',
+    ]);
+    assert_true((int) $renameBudget['status'] === 200, '15) Budget category can be changed through a free categoryId');
+    assert_true((int) ($renameBudget['body']['budget']['categoryId'] ?? 0) === $moveTargetCategoryId, '15) Updated budget should carry the new categoryId');
+
+    $deleteBudgetWithoutCategory = run_api(__DIR__ . '/../api/budgets.php', 'POST', $userId, [
+        'category' => 'Delete-safe',
+        'limit' => 321,
+        'period' => 'monthly',
+    ]);
+    assert_true((int) $deleteBudgetWithoutCategory['status'] === 201, '16) Budget can be created for a new category');
+    $deleteBudgetWithoutCategoryId = (int) ($deleteBudgetWithoutCategory['body']['budget']['id'] ?? 0);
+    $deleteBudgetWithoutCategoryCategoryId = (int) ($deleteBudgetWithoutCategory['body']['budget']['categoryId'] ?? 0);
+    assert_true($deleteBudgetWithoutCategoryCategoryId > 0, '16) New category should be attached to the budget');
+
+    $deleteBudgetResponse = run_api(__DIR__ . '/../api/budgets.php', 'DELETE', $userId, ['id' => $deleteBudgetWithoutCategoryId]);
+    assert_true((int) $deleteBudgetResponse['status'] === 200, '17) Budget delete should return 200');
+
+    $categoryAfterDelete = $pdo->prepare('SELECT COUNT(*) FROM categories WHERE id = :id AND user_id = :user_id LIMIT 1');
+    $categoryAfterDelete->execute(['id' => $deleteBudgetWithoutCategoryCategoryId, 'user_id' => $userId]);
+    assert_true((int) $categoryAfterDelete->fetchColumn() === 1, '17) Deleting a budget should not delete its category');
+
     $updateLimitOnly = run_api(__DIR__ . '/../api/budgets.php', 'PUT', $userId, [
         'id' => $rolloverBudgetId,
         'limit' => 777,
     ]);
-    assert_true((int) $updateLimitOnly['status'] === 200, '12) Limit-only budget update should return 200');
-    assert_float_equals(30.0, (float) ($updateLimitOnly['body']['budget']['spent'] ?? -1), '12) Limit-only update should preserve computed spent');
+    assert_true((int) $updateLimitOnly['status'] === 200, '18) Limit-only budget update should return 200');
+    assert_float_equals(30.0, (float) ($updateLimitOnly['body']['budget']['spent'] ?? -1), '18) Limit-only update should preserve computed spent');
 
     echo "budget_spent_integration_test: OK\n";
     exit(0);

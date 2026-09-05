@@ -33,20 +33,50 @@ function budget_payload(array $row): array
     ];
 }
 
-function ensure_budget_category(PDO $pdo, int $userId, string $name): int
+function resolve_budget_category(PDO $pdo, int $userId, ?int $categoryId, ?string $categoryName): array
 {
+    if ($categoryId !== null) {
+        $stmt = $pdo->prepare('SELECT * FROM categories WHERE id = :id LIMIT 1');
+        $stmt->execute(['id' => $categoryId]);
+        $category = $stmt->fetch();
+
+        if (!$category) {
+            json_response(404, ['ok' => false, 'error' => 'Категорията не беше намерена.']);
+        }
+
+        if ((int) $category['user_id'] !== $userId) {
+            json_response(404, ['ok' => false, 'error' => 'Категорията не принадлежи на текущия потребител.']);
+        }
+
+        if ((string) $category['category_type'] !== 'expense') {
+            json_response(422, ['ok' => false, 'error' => 'Само разходна категория може да се използва за бюджет.']);
+        }
+
+        return [
+            'id' => (int) $category['id'],
+            'name' => (string) $category['name'],
+        ];
+    }
+
+    $name = trim((string) ($categoryName ?? ''));
+    if ($name === '') {
+        json_response(422, ['ok' => false, 'error' => 'Category is required']);
+    }
+
     $stmt = $pdo->prepare(
-        'SELECT id FROM categories WHERE user_id = :user_id AND name = :name AND category_type = :category_type LIMIT 1'
+        'SELECT * FROM categories WHERE user_id = :user_id AND name = :name AND category_type = :category_type LIMIT 1'
     );
     $stmt->execute([
         'user_id' => $userId,
         'name' => $name,
         'category_type' => 'expense',
     ]);
-
     $existing = $stmt->fetch();
     if ($existing) {
-        return (int) $existing['id'];
+        return [
+            'id' => (int) $existing['id'],
+            'name' => (string) $existing['name'],
+        ];
     }
 
     $stmt = $pdo->prepare(
@@ -59,7 +89,10 @@ function ensure_budget_category(PDO $pdo, int $userId, string $name): int
         'category_type' => 'expense',
     ]);
 
-    return (int) $pdo->lastInsertId();
+    return [
+        'id' => (int) $pdo->lastInsertId(),
+        'name' => $name,
+    ];
 }
 
 if ($method === 'GET') {
@@ -91,15 +124,10 @@ if ($method === 'GET') {
 }
 
 if ($method === 'POST') {
-    $category = api_text($data['category'] ?? $data['category_name'] ?? null);
     $limit = api_float_or_null($data['limit'] ?? $data['limit_amount'] ?? null);
     $isFixed = api_bool($data['isFixed'] ?? $data['is_fixed'] ?? null, false);
     if (isset($data['type']) && is_string($data['type'])) {
         $isFixed = strtolower(trim($data['type'])) === 'fixed';
-    }
-
-    if ($category === '') {
-        json_response(422, ['ok' => false, 'error' => 'Category is required']);
     }
 
     if ($limit === null || $limit <= 0) {
@@ -107,29 +135,23 @@ if ($method === 'POST') {
     }
 
     $categoryId = api_int_or_null($data['categoryId'] ?? $data['category_id'] ?? null);
-    if ($categoryId === null) {
-        $categoryId = ensure_budget_category($pdo, $userId, $category);
-    } else {
-        $stmt = $pdo->prepare('SELECT id FROM categories WHERE id = :id AND user_id = :user_id LIMIT 1');
-        $stmt->execute(['id' => $categoryId, 'user_id' => $userId]);
-
-        if (!$stmt->fetch()) {
-            $categoryId = ensure_budget_category($pdo, $userId, $category);
-        }
-    }
+    $resolvedCategory = resolve_budget_category($pdo, $userId, $categoryId, $data['category'] ?? $data['category_name'] ?? null);
+    $category = $resolvedCategory['name'];
+    $categoryId = (int) $resolvedCategory['id'];
 
     $stmt = $pdo->prepare(
         'SELECT id FROM budgets
-         WHERE user_id = :user_id AND category_id = :category_id
+         WHERE user_id = :user_id AND category_id = :category_id AND id <> :ignore_id
          LIMIT 1'
     );
     $stmt->execute([
         'user_id' => $userId,
         'category_id' => $categoryId,
+        'ignore_id' => 0,
     ]);
 
     if ($stmt->fetch()) {
-        json_response(409, ['ok' => false, 'error' => 'Budget for this category already exists']);
+        json_response(409, ['ok' => false, 'error' => 'Вече съществува бюджет за тази категория.']);
     }
 
     $effectivePeriod = api_text($data['period'] ?? null, 'monthly');
@@ -182,41 +204,34 @@ if ($method === 'PUT') {
         json_response(404, ['ok' => false, 'error' => 'Budget not found']);
     }
 
-    $category = api_text($data['category'] ?? $data['category_name'] ?? null, $existing['category_name']);
+    $categoryId = api_int_or_null($data['categoryId'] ?? $data['category_id'] ?? null);
+    $resolvedCategory = resolve_budget_category(
+        $pdo,
+        $userId,
+        $categoryId,
+        $data['category'] ?? $data['category_name'] ?? ($existing['category_name'] ?? null)
+    );
+    $category = $resolvedCategory['name'];
+    $categoryId = (int) $resolvedCategory['id'];
     $limit = api_float_or_null($data['limit'] ?? $data['limit_amount'] ?? null);
     $isFixed = api_bool($data['isFixed'] ?? $data['is_fixed'] ?? null, (bool) (int) $existing['is_fixed']);
     if (isset($data['type']) && is_string($data['type'])) {
         $isFixed = strtolower(trim($data['type'])) === 'fixed';
     }
 
-    $categoryId = api_int_or_null($data['categoryId'] ?? $data['category_id'] ?? null);
-    if ($categoryId === null) {
-        $categoryId = ensure_budget_category($pdo, $userId, $category);
-    } else {
-        $stmt = $pdo->prepare('SELECT id FROM categories WHERE id = :id AND user_id = :user_id LIMIT 1');
-        $stmt->execute(['id' => $categoryId, 'user_id' => $userId]);
+    $stmt = $pdo->prepare(
+        'SELECT id FROM budgets
+         WHERE user_id = :user_id AND category_id = :category_id AND id <> :id
+         LIMIT 1'
+    );
+    $stmt->execute([
+        'user_id' => $userId,
+        'category_id' => $categoryId,
+        'id' => $id,
+    ]);
 
-        if (!$stmt->fetch()) {
-            $categoryId = ensure_budget_category($pdo, $userId, $category);
-        }
-    }
-
-    $targetCategoryId = $categoryId ?? ($existing['category_id'] === null ? null : (int) $existing['category_id']);
-    if ($targetCategoryId !== null) {
-        $stmt = $pdo->prepare(
-            'SELECT id FROM budgets
-             WHERE user_id = :user_id AND category_id = :category_id AND id <> :id
-             LIMIT 1'
-        );
-        $stmt->execute([
-            'user_id' => $userId,
-            'category_id' => $targetCategoryId,
-            'id' => $id,
-        ]);
-
-        if ($stmt->fetch()) {
-            json_response(409, ['ok' => false, 'error' => 'Budget for this category already exists']);
-        }
+    if ($stmt->fetch()) {
+        json_response(409, ['ok' => false, 'error' => 'Вече съществува бюджет за тази категория.']);
     }
 
     $effectivePeriod = api_text($data['period'] ?? null, $existing['period']);
@@ -242,7 +257,7 @@ if ($method === 'PUT') {
          WHERE id = :id AND user_id = :user_id'
     );
     $stmt->execute([
-        'category_id' => $categoryId ?? $existing['category_id'],
+        'category_id' => $categoryId,
         'category_name' => $category,
         'period' => $effectivePeriod,
         'limit_amount' => number_format($limit ?? (float) $existing['limit_amount'], 2, '.', ''),
@@ -269,32 +284,8 @@ if ($method === 'DELETE') {
         json_response(422, ['ok' => false, 'error' => 'Budget id is required']);
     }
 
-    $stmt = $pdo->prepare('SELECT category_id FROM budgets WHERE id = :id AND user_id = :user_id LIMIT 1');
-    $stmt->execute(['id' => $id, 'user_id' => $userId]);
-    $budget = $stmt->fetch();
-    $categoryId = $budget['category_id'] ?? null;
-
     $stmt = $pdo->prepare('DELETE FROM budgets WHERE id = :id AND user_id = :user_id');
     $stmt->execute(['id' => $id, 'user_id' => $userId]);
-
-    if ($categoryId !== null && $categoryId !== '') {
-        $stmt = $pdo->prepare('SELECT COUNT(*) FROM budgets WHERE user_id = :user_id AND category_id = :category_id');
-        $stmt->execute(['user_id' => $userId, 'category_id' => $categoryId]);
-        $remainingBudgets = (int) $stmt->fetchColumn();
-
-        if ($remainingBudgets === 0) {
-            $stmt = $pdo->prepare('SELECT is_builtin FROM categories WHERE id = :id AND user_id = :user_id LIMIT 1');
-            $stmt->execute(['id' => $categoryId, 'user_id' => $userId]);
-            $category = $stmt->fetch();
-
-            if ($category && (int) $category['is_builtin'] === 0) {
-                $pdo->prepare('DELETE FROM categories WHERE id = :id AND user_id = :user_id')->execute([
-                    'id' => $categoryId,
-                    'user_id' => $userId,
-                ]);
-            }
-        }
-    }
 
     json_response(200, ['ok' => true]);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { createCategory, getCategories } from "../services/categoriesApi";
+import { getCategories } from "../services/categoriesApi";
 import {
 	calculateBudgetUsage,
 	calculateMonthSpendingProjection,
@@ -11,17 +11,17 @@ import {
 	formatEur,
 } from "../services/financeData";
 import { createBudget, deleteBudget, getBudgets, updateBudget } from "../services/budgetsApi";
-import { deleteCategory } from "../services/categoriesApi";
 import { transactionsChangedEvent } from "../services/transactionsApi";
 
 function Budgets() {
 	const [categories, setCategories] = useState([]);
 	const [budgets, setBudgets] = useState([]);
-	const [newBudget, setNewBudget] = useState({ category: "", limit: "", isFixed: false });
+	const [newBudget, setNewBudget] = useState({ categoryId: "", categoryName: "", limit: "", isFixed: false });
 	const [isAddingBudget, setIsAddingBudget] = useState(false);
 	const [isCreatingCategory, setIsCreatingCategory] = useState(false);
 	const [editingBudgetId, setEditingBudgetId] = useState(null);
-	const [budgetNameDraft, setBudgetNameDraft] = useState("");
+	const [budgetCategoryIdDraft, setBudgetCategoryIdDraft] = useState("");
+	const [budgetCategoryNameDraft, setBudgetCategoryNameDraft] = useState("");
 	const [budgetLimitDraft, setBudgetLimitDraft] = useState("");
 	const [budgetIsFixedDraft, setBudgetIsFixedDraft] = useState(false);
 	const [loading, setLoading] = useState(true);
@@ -107,8 +107,15 @@ function Budgets() {
 
 	const addBudget = (event) => {
 		event.preventDefault();
-		const trimmedCategory = newBudget.category.trim();
-		if (!trimmedCategory || Number(newBudget.limit) <= 0) {
+
+		const categoryChoice = newBudget.categoryId;
+		const chosenCategory = categories.find(
+			(item) => String(item.id) === String(categoryChoice),
+		);
+		const trimmedCategory = chosenCategory ? chosenCategory.category : newBudget.categoryName.trim();
+		const nextLimit = Number(newBudget.limit);
+
+		if (!trimmedCategory || !Number.isFinite(nextLimit) || nextLimit <= 0) {
 			return;
 		}
 
@@ -117,35 +124,14 @@ function Budgets() {
 			setError("");
 
 			try {
-				const normalizedName = trimmedCategory.toLowerCase();
-				let categoryRecord = categories.find(
-					(item) => item.category?.toLowerCase() === normalizedName && item.categoryType === "expense",
-				);
-
-				if (!categoryRecord) {
-					try {
-						categoryRecord = await createCategory({ category: trimmedCategory, categoryType: "expense" });
-						setCategories((current) => [...current, categoryRecord]);
-					} catch {
-						const freshCategories = await getCategories();
-						categoryRecord = freshCategories.find(
-							(item) =>
-								item.categoryType === "expense" && item.category?.toLowerCase() === normalizedName,
-						);
-						if (!categoryRecord) {
-							throw new Error("Missing category after creation");
-						}
-					}
-				}
-
 				const created = await createBudget({
 					category: trimmedCategory,
-					categoryId: categoryRecord?.id ?? null,
-					limit: Number(newBudget.limit),
+					categoryId: chosenCategory ? chosenCategory.id : null,
+					limit: nextLimit,
 					isFixed: Boolean(newBudget.isFixed),
 				});
 				setBudgets((current) => [...current, created]);
-				setNewBudget({ category: "", limit: "", isFixed: false });
+				setNewBudget({ categoryId: "", categoryName: "", limit: "", isFixed: false });
 				setIsAddingBudget(false);
 			} catch {
 				setError("Неуспешно създаване на бюджет.");
@@ -156,17 +142,25 @@ function Budgets() {
 	};
 
 	const startBudgetEdit = (budget) => {
+		const selectedCategory = budget.categoryId
+			? categories.find((item) => String(item.id) === String(budget.categoryId))
+			: null;
+
 		setEditingBudgetId(budget.id);
-		setBudgetNameDraft(budget.category);
+		setBudgetCategoryIdDraft(selectedCategory ? String(selectedCategory.id) : "new");
+		setBudgetCategoryNameDraft(selectedCategory ? selectedCategory.category : budget.category);
 		setBudgetLimitDraft(String(budget.limit));
 		setBudgetIsFixedDraft(Boolean(budget.isFixed));
 	};
 
 	const saveBudgetLimit = async (id) => {
-		const trimmedName = budgetNameDraft.trim();
+		const selectedCategory = budgetCategoryIdDraft !== "new"
+			? categories.find((item) => String(item.id) === String(budgetCategoryIdDraft))
+			: null;
+		const trimmedName = selectedCategory ? selectedCategory.category : budgetCategoryNameDraft.trim();
 		const nextLimit = Number(budgetLimitDraft);
 		if (!trimmedName) {
-			setError("Името на бюджета не може да е празно.");
+			setError("Избери или въведи категория.");
 			return;
 		}
 		if (!Number.isFinite(nextLimit) || nextLimit <= 0) {
@@ -178,12 +172,14 @@ function Budgets() {
 			const updated = await updateBudget({
 				id,
 				category: trimmedName,
+				categoryId: selectedCategory ? selectedCategory.id : null,
 				limit: nextLimit,
 				isFixed: budgetIsFixedDraft,
 			});
 			setBudgets((current) => current.map((budget) => (budget.id === id ? updated : budget)));
 			setEditingBudgetId(null);
-			setBudgetNameDraft("");
+			setBudgetCategoryIdDraft("");
+			setBudgetCategoryNameDraft("");
 			setBudgetLimitDraft("");
 			setBudgetIsFixedDraft(false);
 			setError("");
@@ -201,21 +197,6 @@ function Budgets() {
 		try {
 			await deleteBudget(budget.id);
 			setBudgets((current) => current.filter((item) => item.id !== budget.id));
-
-			if (budget.categoryId) {
-				const categoryStillUsed = budgets.some(
-					(item) => item.id !== budget.id && item.categoryId === budget.categoryId,
-				);
-
-				if (!categoryStillUsed) {
-					try {
-						await deleteCategory(budget.categoryId);
-						setCategories((current) => current.filter((item) => item.id !== budget.categoryId));
-					} catch {
-						setError("Бюджетът е изтрит, но категорията не можа да бъде премахната.");
-					}
-				}
-			}
 			setError("");
 		} catch {
 			setError("Неуспешно изтриване на бюджета.");
@@ -255,14 +236,36 @@ function Budgets() {
 						</div>
 					) : (
 						<form className="inline-form budget-add-form" onSubmit={addBudget}>
-							<input
-								type="text"
-								placeholder="Име на категория/бюджет"
-								value={newBudget.category}
-								onChange={(event) =>
-									setNewBudget((current) => ({ ...current, category: event.target.value }))
-								}
-							/>
+							{categories.length > 0 ? (
+								<select
+									value={newBudget.categoryId || ""}
+									onChange={(event) =>
+										setNewBudget((current) => ({
+											...current,
+											categoryId: event.target.value,
+											categoryName: "",
+										}))
+									}
+								>
+									<option value="">Категория</option>
+									{categories.map((item) => (
+										<option key={item.id} value={String(item.id)}>
+											{item.category}
+										</option>
+									))}
+									<option value="new">+ Нова категория</option>
+								</select>
+							) : null}
+							{categories.length === 0 || newBudget.categoryId === "new" ? (
+								<input
+									type="text"
+									placeholder="Нова категория"
+									value={newBudget.categoryName}
+									onChange={(event) =>
+										setNewBudget((current) => ({ ...current, categoryName: event.target.value }))
+									}
+								/>
+							) : null}
 							<input
 								type="number"
 								step="0.01"
@@ -291,7 +294,7 @@ function Budgets() {
 								className="button button--ghost"
 								onClick={() => {
 									setIsAddingBudget(false);
-									setNewBudget({ category: "", limit: "", isFixed: false });
+									setNewBudget({ categoryId: "", categoryName: "", limit: "", isFixed: false });
 									setError("");
 								}}
 							>
@@ -321,12 +324,26 @@ function Budgets() {
 									<div className="budget-actions">
 										{editingBudgetId === budget.id ? (
 											<div className="inline-form inline-form--compact budget-edit-form">
-												<input
-													type="text"
-													value={budgetNameDraft}
-													onChange={(event) => setBudgetNameDraft(event.target.value)}
-													placeholder="Име на бюджета"
-												/>
+												<select
+													value={budgetCategoryIdDraft}
+													onChange={(event) => setBudgetCategoryIdDraft(event.target.value)}
+												>
+													<option value="">Категория</option>
+													{categories.map((item) => (
+														<option key={item.id} value={String(item.id)}>
+															{item.category}
+														</option>
+													))}
+													<option value="new">+ Нова категория</option>
+												</select>
+												{budgetCategoryIdDraft === "new" ? (
+													<input
+														type="text"
+														value={budgetCategoryNameDraft}
+														onChange={(event) => setBudgetCategoryNameDraft(event.target.value)}
+														placeholder="Нова категория"
+													/>
+												) : null}
 												<input
 													type="number"
 													step="0.01"
@@ -351,7 +368,8 @@ function Budgets() {
 													className="button button--ghost"
 													onClick={() => {
 														setEditingBudgetId(null);
-														setBudgetNameDraft("");
+														setBudgetCategoryIdDraft("");
+														setBudgetCategoryNameDraft("");
 														setBudgetLimitDraft("");
 														setBudgetIsFixedDraft(false);
 													}}

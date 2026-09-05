@@ -22,7 +22,7 @@ function category_seed_default_categories(PDO $pdo, int $userId): void
 
     $stmt = $pdo->prepare(
         'INSERT IGNORE INTO categories (user_id, name, category_type, is_builtin)
-         VALUES (:user_id, :name, :category_type, 1)'
+         VALUES (:user_id, :name, :category_type, 0)'
     );
 
     foreach ($categories as [$name, $categoryType]) {
