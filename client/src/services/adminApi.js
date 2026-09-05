@@ -1,5 +1,15 @@
 import { apiRequest } from "./apiClient.js";
 
+let adminCsrfToken = "";
+
+function setAdminCsrfToken(token) {
+  adminCsrfToken = String(token || "").trim();
+}
+
+function adminHeaders() {
+  return adminCsrfToken ? { "X-CSRF-Token": adminCsrfToken } : {};
+}
+
 export function normalizeAdminUser(item) {
   const firstName = String(item?.firstName ?? "").trim();
   const lastName = String(item?.lastName ?? "").trim();
@@ -12,20 +22,8 @@ export function normalizeAdminUser(item) {
     lastName,
     email: String(item?.email ?? ""),
     registeredAt: item?.registeredAt ?? null,
-    lastLoginAt: item?.lastLoginAt ?? null,
     profileStatus: String(item?.profileStatus ?? "active").toLowerCase(),
-    role: String(item?.role ?? "user").toLowerCase(),
-    isVerified: Boolean(item?.isVerified),
-    loginLogs: Array.isArray(item?.loginLogs)
-      ? item.loginLogs.map((log) => ({
-          id: Number(log?.id ?? 0),
-          email: log?.email ?? null,
-          ipAddress: log?.ipAddress ?? "",
-          userAgent: log?.userAgent ?? "",
-          isSuccess: Boolean(log?.isSuccess),
-          loggedAt: log?.loggedAt ?? null,
-        }))
-      : [],
+    isVerified: Boolean(Number(item?.isVerified ?? 0)),
   };
 }
 
@@ -33,24 +31,28 @@ export async function getAdminOverview(params = {}) {
   const query = new URLSearchParams();
 
   if (params.search) {
-    query.set("search", params.search);
+    query.set("search", String(params.search).trim());
   }
-  if (params.status) {
-    query.set("status", params.status);
-  }
-  if (params.role) {
-    query.set("role", params.role);
+  if (params.page) {
+    query.set("page", String(params.page));
   }
 
   const url = query.toString() ? `?${query.toString()}` : "";
   const result = await apiRequest(`/admin/users.php${url}`, { method: "GET" });
 
+  setAdminCsrfToken(result?.csrfToken ?? "");
+
   return {
     stats: {
-      usersCount: Number(result?.stats?.usersCount ?? 0),
+      totalUsersCount: Number(result?.stats?.totalUsersCount ?? 0),
+      verifiedUsersCount: Number(result?.stats?.verifiedUsersCount ?? 0),
       blockedUsersCount: Number(result?.stats?.blockedUsersCount ?? 0),
-      recent7Days: Number(result?.stats?.recent7Days ?? 0),
-      recent30Days: Number(result?.stats?.recent30Days ?? 0),
+    },
+    pagination: {
+      page: Number(result?.pagination?.page ?? 1),
+      pageSize: Number(result?.pagination?.pageSize ?? 20),
+      totalUsers: Number(result?.pagination?.totalUsers ?? 0),
+      totalPages: Number(result?.pagination?.totalPages ?? 0),
     },
     users: Array.isArray(result?.users) ? result.users.map(normalizeAdminUser) : [],
   };
@@ -59,6 +61,7 @@ export async function getAdminOverview(params = {}) {
 export async function createUser(payload = {}) {
   const result = await apiRequest("/admin/users.php", {
     method: "POST",
+    headers: adminHeaders(),
     body: JSON.stringify(payload),
   });
 
@@ -68,6 +71,7 @@ export async function createUser(payload = {}) {
 export async function updateUserProfileStatus(userId, status) {
   const result = await apiRequest("/admin/users.php", {
     method: "PATCH",
+    headers: adminHeaders(),
     body: JSON.stringify({ userId, status }),
   });
 
@@ -77,6 +81,7 @@ export async function updateUserProfileStatus(userId, status) {
 export async function updateUserRole(userId, role) {
   const result = await apiRequest("/admin/users.php", {
     method: "PATCH",
+    headers: adminHeaders(),
     body: JSON.stringify({ userId, role }),
   });
 
@@ -86,6 +91,7 @@ export async function updateUserRole(userId, role) {
 export async function updateUserProfile(userId, payload = {}) {
   const result = await apiRequest("/admin/users.php", {
     method: "PUT",
+    headers: adminHeaders(),
     body: JSON.stringify({ userId, ...payload }),
   });
 
@@ -95,8 +101,13 @@ export async function updateUserProfile(userId, payload = {}) {
 export async function deleteUser(userId) {
   const result = await apiRequest("/admin/users.php", {
     method: "DELETE",
+    headers: adminHeaders(),
     body: JSON.stringify({ userId }),
   });
 
   return result?.deletedUserId ?? userId;
+}
+
+export function getAdminCsrfToken() {
+  return adminCsrfToken;
 }

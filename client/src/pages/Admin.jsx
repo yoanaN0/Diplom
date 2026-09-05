@@ -1,23 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
-import {
-  createUser,
-  deleteUser,
-  getAdminOverview,
-  updateUserProfile,
-  updateUserProfileStatus,
-  updateUserRole,
-} from "../services/adminApi";
+import { getSessionUser } from "../services/authStorage";
+import { getAdminOverview, updateUserProfileStatus } from "../services/adminApi";
 
 const statusLabels = {
   active: "Активен",
   blocked: "Блокиран",
-  deleted: "Изтрит",
 };
 
-const roleLabels = {
-  admin: "Администратор",
-  user: "Потребител",
+const verificationLabels = {
+  true: "Потвърден",
+  false: "Непотвърден",
 };
 
 function formatDateTime(value) {
@@ -32,46 +25,40 @@ function formatDateTime(value) {
 
   return new Intl.DateTimeFormat("bg-BG", {
     dateStyle: "medium",
-    timeStyle: "short",
   }).format(parsed);
 }
 
 function Admin() {
+  const currentUser = getSessionUser();
+  const currentUserId = Number(currentUser?.id ?? 0);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [users, setUsers] = useState([]);
   const [stats, setStats] = useState({
-    usersCount: 0,
+    totalUsersCount: 0,
+    verifiedUsersCount: 0,
     blockedUsersCount: 0,
-    recent7Days: 0,
-    recent30Days: 0,
   });
-  const [statusUpdateId, setStatusUpdateId] = useState(null);
-  const [roleUpdateId, setRoleUpdateId] = useState(null);
-  const [deleteId, setDeleteId] = useState(null);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: 20,
+    totalUsers: 0,
+    totalPages: 0,
+  });
   const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [roleFilter, setRoleFilter] = useState("all");
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [createDraft, setCreateDraft] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    password: "",
-    role: "user",
-    status: "active",
-  });
-  const [editUserId, setEditUserId] = useState(null);
-  const [editDraft, setEditDraft] = useState({ firstName: "", lastName: "", email: "" });
+  const [pendingUserId, setPendingUserId] = useState(null);
 
-  const loadOverview = async (nextFilters = { search: searchTerm, status: statusFilter, role: roleFilter }) => {
+  const loadOverview = async ({ search = searchTerm, page = 1 } = {}) => {
     setLoading(true);
     setError("");
 
     try {
-      const overview = await getAdminOverview(nextFilters);
+      const overview = await getAdminOverview({ search, page });
       setUsers(overview.users);
       setStats(overview.stats);
+      setPagination(overview.pagination);
+      setSearchTerm(search);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Неуспешно зареждане на админ панела.");
     } finally {
@@ -80,425 +67,178 @@ function Admin() {
   };
 
   useEffect(() => {
-    void loadOverview();
+    void loadOverview({ search: "", page: 1 });
   }, []);
 
-  const sortedUsers = useMemo(
-    () => [...users].sort((left, right) => (right.registeredAt || "").localeCompare(left.registeredAt || "")),
-    [users],
-  );
+  const handleSearchSubmit = async (event) => {
+    event.preventDefault();
+    await loadOverview({ search: searchTerm, page: 1 });
+  };
 
-  const filteredUsers = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase();
+  const handlePageChange = async (nextPage) => {
+    if (nextPage < 1) {
+      return;
+    }
 
-    return sortedUsers.filter((user) => {
-      const matchesSearch =
-        normalizedSearch === "" ||
-        `${user.name} ${user.email}`.toLowerCase().includes(normalizedSearch);
-      const matchesStatus = statusFilter === "all" || user.profileStatus === statusFilter;
-      const matchesRole = roleFilter === "all" || user.role === roleFilter;
+    if (pagination.totalPages > 0 && nextPage > pagination.totalPages) {
+      return;
+    }
 
-      return matchesSearch && matchesStatus && matchesRole;
-    });
-  }, [searchTerm, sortedUsers, statusFilter, roleFilter]);
+    await loadOverview({ search: searchTerm, page: nextPage });
+  };
 
-  const blockedUsers = useMemo(
-    () => sortedUsers.filter((user) => user.profileStatus === "blocked"),
-    [sortedUsers],
-  );
+  const handleStatusToggle = async (user) => {
+    const nextStatus = user.profileStatus === "active" ? "blocked" : "active";
 
-  const handleStatusToggle = async (userId, currentStatus) => {
-    const nextStatus = currentStatus === "active" ? "blocked" : "active";
-    setStatusUpdateId(userId);
+    if (nextStatus === "blocked" && user.id === currentUserId) {
+      setError("Не можеш да блокираш собствения си профил.");
+      return;
+    }
+
+    if (nextStatus === "blocked" && !window.confirm(`Сигурни ли сте, че искате да блокирате ${user.name || user.email || "този потребител"}?`)) {
+      return;
+    }
+
+    setPendingUserId(user.id);
     setError("");
 
     try {
-      const updatedUser = await updateUserProfileStatus(userId, nextStatus);
-      setUsers((current) => current.map((user) => (user.id === userId ? { ...user, ...updatedUser } : user)));
-      await loadOverview({ search: searchTerm, status: statusFilter, role: roleFilter });
+      await updateUserProfileStatus(user.id, nextStatus);
+      await loadOverview({ search: searchTerm, page: pagination.page });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Неуспешна промяна на статуса.");
     } finally {
-      setStatusUpdateId(null);
+      setPendingUserId(null);
     }
-  };
-
-  const handleRoleChange = async (userId, nextRole) => {
-    setRoleUpdateId(userId);
-    setError("");
-
-    try {
-      const updatedUser = await updateUserRole(userId, nextRole);
-      setUsers((current) => current.map((user) => (user.id === userId ? { ...user, ...updatedUser } : user)));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Неуспешна промяна на ролята.");
-    } finally {
-      setRoleUpdateId(null);
-    }
-  };
-
-  const handleCreateUser = async () => {
-    setError("");
-
-    try {
-      const createdUser = await createUser(createDraft);
-      setUsers((current) => [createdUser, ...current]);
-      setShowCreateForm(false);
-      setCreateDraft({
-        firstName: "",
-        lastName: "",
-        email: "",
-        password: "",
-        role: "user",
-        status: "active",
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Неуспешно създаване на потребител.");
-    }
-  };
-
-  const handleEditStart = (user) => {
-    setEditUserId(user.id);
-    setEditDraft({
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-    });
-  };
-
-  const handleEditSave = async () => {
-    if (!editUserId) {
-      return;
-    }
-
-    setError("");
-
-    try {
-      const updatedUser = await updateUserProfile(editUserId, editDraft);
-      setUsers((current) => current.map((user) => (user.id === editUserId ? { ...user, ...updatedUser } : user)));
-      setEditUserId(null);
-      setEditDraft({ firstName: "", lastName: "", email: "" });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Неуспешно обновяване на потребителя.");
-    }
-  };
-
-  const handleDelete = async (userId) => {
-    if (!window.confirm("Сигурни ли сте, че искате да изтриете този потребител?")) {
-      return;
-    }
-
-    setDeleteId(userId);
-    setError("");
-
-    try {
-      await deleteUser(userId);
-      setUsers((current) => current.map((user) =>
-        user.id === userId ? { ...user, profileStatus: "deleted" } : user,
-      ));
-      if (editUserId === userId) {
-        setEditUserId(null);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Неуспешно изтриване на потребителя.");
-    } finally {
-      setDeleteId(null);
-    }
-  };
-
-  const applyFilters = async () => {
-    await loadOverview({ search: searchTerm, status: statusFilter, role: roleFilter });
   };
 
   return (
     <div className="finance-page admin-page">
       <section className="finance-header">
         <div>
-          <h1>Админ панел</h1>
-          <p>Управлявай потребителите, техния статус и ролите в системата.</p>
+          <h1>Административен панел</h1>
+          <p>Преглед, търсене по имейл и блокиране или активиране на потребители.</p>
         </div>
       </section>
 
       <section className="admin-stats-grid">
         <article className="surface-card admin-stat-card">
-          <p>Регистрирани</p>
-          <strong>{stats.usersCount}</strong>
+          <p>Общо потребители</p>
+          <strong>{stats.totalUsersCount}</strong>
         </article>
         <article className="surface-card admin-stat-card">
-          <p>Блокирани</p>
+          <p>Потвърдени потребители</p>
+          <strong>{stats.verifiedUsersCount}</strong>
+        </article>
+        <article className="surface-card admin-stat-card">
+          <p>Блокирани потребители</p>
           <strong>{stats.blockedUsersCount}</strong>
         </article>
-        <article className="surface-card admin-stat-card">
-          <p>Нови за 7 дни</p>
-          <strong>{stats.recent7Days}</strong>
-        </article>
-        <article className="surface-card admin-stat-card">
-          <p>Нови за 30 дни</p>
-          <strong>{stats.recent30Days}</strong>
-        </article>
-      </section>
-
-      {loading ? <p className="muted">Зареждане на админ данни...</p> : null}
-      {error ? <p className="muted">{error}</p> : null}
-
-      <section className="surface-card admin-blocked-card">
-        <div className="surface-card__head">
-          <h2>Блокирани потребители</h2>
-        </div>
-
-        {blockedUsers.length === 0 ? (
-          <p className="muted">Няма блокирани профили.</p>
-        ) : (
-          <ul className="admin-blocked-list">
-            {blockedUsers.map((user) => (
-              <li key={`blocked-${user.id}`} className="admin-blocked-item">
-                <div>
-                  <strong>{user.name || "-"}</strong>
-                  <p>{user.email || "-"}</p>
-                  <p>Последен вход: {formatDateTime(user.lastLoginAt)}</p>
-                </div>
-                <button
-                  type="button"
-                  className="button button--primary"
-                  onClick={() => handleStatusToggle(user.id, user.profileStatus)}
-                  disabled={statusUpdateId === user.id}
-                >
-                  {statusUpdateId === user.id ? "Обновяване..." : "Активирай"}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
 
       <section className="surface-card admin-users-card">
         <div className="surface-card__head">
-          <h2>Управление на потребители</h2>
-          <div className="surface-card__head-actions">
-            <button type="button" className="button button--primary" onClick={() => setShowCreateForm((current) => !current)}>
-              {showCreateForm ? "Затвори" : "Създай потребител"}
-            </button>
-            <button type="button" className="button button--ghost" onClick={() => loadOverview()}>
-              Обнови
-            </button>
-          </div>
+          <h2>Потребители</h2>
+          <p className="muted admin-table-hint">Показват се до 20 записа на страница.</p>
         </div>
 
-        {showCreateForm ? (
-          <div className="admin-create-form">
-            <div className="admin-create-grid">
-              <label>
-                <span>Име</span>
-                <input
-                  type="text"
-                  value={createDraft.firstName}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, firstName: event.target.value }))}
-                />
-              </label>
-              <label>
-                <span>Фамилия</span>
-                <input
-                  type="text"
-                  value={createDraft.lastName}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, lastName: event.target.value }))}
-                />
-              </label>
-              <label>
-                <span>Имейл</span>
-                <input
-                  type="email"
-                  value={createDraft.email}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, email: event.target.value }))}
-                />
-              </label>
-              <label>
-                <span>Парола</span>
-                <input
-                  type="password"
-                  value={createDraft.password}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, password: event.target.value }))}
-                />
-              </label>
-              <label>
-                <span>Роля</span>
-                <select
-                  value={createDraft.role}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, role: event.target.value }))}
-                >
-                  <option value="user">Потребител</option>
-                  <option value="admin">Администратор</option>
-                </select>
-              </label>
-              <label>
-                <span>Статус</span>
-                <select
-                  value={createDraft.status}
-                  onChange={(event) => setCreateDraft((current) => ({ ...current, status: event.target.value }))}
-                >
-                  <option value="active">Активен</option>
-                  <option value="blocked">Блокиран</option>
-                  <option value="deleted">Изтрит</option>
-                </select>
-              </label>
-            </div>
-            <div className="admin-create-actions">
-              <button type="button" className="button button--primary" onClick={handleCreateUser}>
-                Създай
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="admin-filters">
+        <form className="admin-filters" onSubmit={handleSearchSubmit}>
           <label>
-            <span>Търсене</span>
+            <span>Търсене по имейл</span>
             <input
               type="search"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Име или имейл"
+              placeholder="example@domain.com"
             />
           </label>
-          <label>
-            <span>Статус</span>
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-              <option value="all">Всички</option>
-              <option value="active">Активни</option>
-              <option value="blocked">Блокирани</option>
-              <option value="deleted">Изтрити</option>
-            </select>
-          </label>
-          <label>
-            <span>Роля</span>
-            <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-              <option value="all">Всички</option>
-              <option value="admin">Администратори</option>
-              <option value="user">Потребители</option>
-            </select>
-          </label>
-          <button type="button" className="button button--primary" onClick={applyFilters}>
-            Приложи
+          <button type="submit" className="button button--primary">
+            Търси
           </button>
-        </div>
+        </form>
 
-        <div className="admin-table-wrap">
-          <table className="admin-table">
-            <thead>
-              <tr>
-                <th>Име</th>
-                <th>Имейл</th>
-                <th>Роля</th>
-                <th>Регистрация</th>
-                <th>Последен вход</th>
-                <th>Статус</th>
-                <th>Действия</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredUsers.length === 0 ? (
+        {loading ? <p className="muted admin-state">Зареждане на потребители...</p> : null}
+        {error ? <p className="muted admin-state admin-state--error">{error}</p> : null}
+
+        {!loading && !error && users.length === 0 ? (
+          <p className="muted admin-state">Няма потребители по зададеното търсене.</p>
+        ) : null}
+
+        {!loading && !error && users.length > 0 ? (
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
                 <tr>
-                  <td colSpan="7" className="muted">
-                    Няма потребители по избраните филтри.
-                  </td>
+                  <th>Име и фамилия</th>
+                  <th>Имейл</th>
+                  <th>Дата на регистрация</th>
+                  <th>Верификация</th>
+                  <th>Статус</th>
+                  <th>Действие</th>
                 </tr>
-              ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.id}>
-                    <td>
-                      {editUserId === user.id ? (
-                        <div className="admin-inline-editor">
-                          <input
-                            type="text"
-                            value={editDraft.firstName}
-                            onChange={(event) => setEditDraft((current) => ({ ...current, firstName: event.target.value }))}
-                          />
-                          <input
-                            type="text"
-                            value={editDraft.lastName}
-                            onChange={(event) => setEditDraft((current) => ({ ...current, lastName: event.target.value }))}
-                          />
-                        </div>
-                      ) : (
-                        user.name || "-"
-                      )}
-                    </td>
-                    <td>
-                      {editUserId === user.id ? (
-                        <input
-                          type="email"
-                          value={editDraft.email}
-                          onChange={(event) => setEditDraft((current) => ({ ...current, email: event.target.value }))}
-                        />
-                      ) : (
-                        user.email || "-"
-                      )}
-                    </td>
-                    <td>
-                      {user.role === "admin" ? (
-                        <span className="pill pill--ok">{roleLabels[user.role] || user.role}</span>
-                      ) : (
-                        <select
-                          value={user.role}
-                          onChange={(event) => handleRoleChange(user.id, event.target.value)}
-                          disabled={roleUpdateId === user.id}
+              </thead>
+              <tbody>
+                {users.map((user) => {
+                  const isCurrentUser = user.id === currentUserId;
+                  const actionLabel = user.profileStatus === "active" ? "Блокирай" : "Активирай";
+                  const isPending = pendingUserId === user.id;
+
+                  return (
+                    <tr key={user.id}>
+                      <td>{user.name || "-"}</td>
+                      <td>{user.email || "-"}</td>
+                      <td>{formatDateTime(user.registeredAt)}</td>
+                      <td>
+                        <span className={`admin-status admin-status--${user.isVerified ? "verified" : "unverified"}`}>
+                          {verificationLabels[String(Boolean(user.isVerified))]}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`admin-status admin-status--${user.profileStatus}`}>
+                          {statusLabels[user.profileStatus] || user.profileStatus}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className={user.profileStatus === "active" ? "button button--ghost" : "button button--primary"}
+                          onClick={() => handleStatusToggle(user)}
+                          disabled={isPending || (isCurrentUser && user.profileStatus === "active")}
+                          title={isCurrentUser && user.profileStatus === "active" ? "Не можеш да блокираш собствения си профил." : undefined}
                         >
-                          <option value="admin">Администратор</option>
-                          <option value="user">Потребител</option>
-                        </select>
-                      )}
-                    </td>
-                    <td>{formatDateTime(user.registeredAt)}</td>
-                    <td>{formatDateTime(user.lastLoginAt)}</td>
-                    <td>
-                      <span className={`admin-status admin-status--${user.profileStatus}`}>
-                        {statusLabels[user.profileStatus] || user.profileStatus}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="admin-action-stack">
-                        {editUserId === user.id ? (
-                          <>
-                            <button type="button" className="button button--primary" onClick={handleEditSave}>
-                              Запази
-                            </button>
-                            <button type="button" className="button button--ghost" onClick={() => setEditUserId(null)}>
-                              Отказ
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button type="button" className="button button--ghost" onClick={() => handleEditStart(user)}>
-                              Редактирай
-                            </button>
-                            <button
-                              type="button"
-                              className={user.profileStatus === "active" ? "button button--ghost" : "button button--primary"}
-                              onClick={() => handleStatusToggle(user.id, user.profileStatus)}
-                              disabled={statusUpdateId === user.id}
-                            >
-                              {statusUpdateId === user.id
-                                ? "Обновяване..."
-                                : user.profileStatus === "active"
-                                  ? "Блокирай"
-                                  : "Активирай"}
-                            </button>
-                            <button
-                              type="button"
-                              className="button button--danger"
-                              onClick={() => handleDelete(user.id)}
-                              disabled={deleteId === user.id}
-                            >
-                              {deleteId === user.id ? "Изтриване..." : "Изтрий"}
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                          {isPending ? "Обновяване..." : actionLabel}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+
+        <div className="admin-pagination">
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={() => void handlePageChange(pagination.page - 1)}
+            disabled={loading || pagination.page <= 1}
+          >
+            Предишна
+          </button>
+          <span className="admin-pagination__info">
+            {pagination.totalUsers === 0
+              ? "Няма страници"
+              : `Страница ${pagination.page} от ${pagination.totalPages || 1} · ${pagination.totalUsers} потребители`}
+          </span>
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={() => void handlePageChange(pagination.page + 1)}
+            disabled={loading || (pagination.totalPages > 0 && pagination.page >= pagination.totalPages)}
+          >
+            Следваща
+          </button>
         </div>
       </section>
     </div>

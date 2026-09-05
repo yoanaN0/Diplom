@@ -3278,7 +3278,7 @@ code,
 
 .admin-stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -3303,70 +3303,16 @@ code,
   overflow: hidden;
 }
 
-.admin-blocked-card {
-  display: grid;
-  gap: 12px;
-}
-
-.admin-blocked-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-}
-
-.admin-blocked-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid rgba(220, 38, 38, 0.18);
-  border-radius: 14px;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.82), rgba(254, 242, 242, 0.8));
-}
-
-.admin-blocked-item strong {
-  color: var(--text-h);
-}
-
-.admin-blocked-item p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
 .admin-filters {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) 180px 180px auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   margin-bottom: 18px;
   padding: 14px;
   border: 1px solid rgba(16, 24, 40, 0.08);
   border-radius: 18px;
   background: rgba(249, 250, 251, 0.75);
-}
-
-.admin-create-form {
-  display: grid;
-  gap: 14px;
-  margin-bottom: 18px;
-  padding: 14px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
-  border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(236, 253, 245, 0.72));
-}
-
-.admin-create-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.admin-create-actions {
-  display: flex;
-  justify-content: flex-end;
+  align-items: end;
 }
 
 .admin-filters label,
@@ -3406,7 +3352,7 @@ code,
 
 .admin-table {
   width: 100%;
-  min-width: 1080px;
+  min-width: 860px;
   border-collapse: collapse;
 }
 
@@ -3445,43 +3391,42 @@ code,
   color: #991b1b;
 }
 
-.admin-status--deleted {
-  background: rgba(71, 85, 105, 0.2);
-  color: #334155;
+.admin-status--verified {
+  background: rgba(22, 163, 74, 0.14);
+  color: #166534;
 }
 
-.admin-action-stack {
+.admin-status--unverified {
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
+}
+
+.admin-table-hint {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.admin-state {
+  margin: 0 0 14px;
+}
+
+.admin-state--error {
+  color: #991b1b;
+}
+
+.admin-pagination {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(16, 24, 40, 0.08);
   flex-wrap: wrap;
-  gap: 8px;
 }
 
-.admin-technical-details {
-  display: grid;
-  gap: 8px;
-}
-
-.admin-technical-details summary {
-  cursor: pointer;
-  color: var(--accent-strong);
+.admin-pagination__info {
   font-weight: 700;
-}
-
-.admin-technical-details p {
-  margin: 0;
-  font-size: 0.88rem;
-  line-height: 1.5;
-}
-
-.admin-technical-details ul {
-  margin: 0;
-  padding-left: 18px;
-  display: grid;
-  gap: 6px;
-}
-
-.admin-technical-details li {
-  font-size: 0.82rem;
   color: var(--text-h);
 }
 
@@ -3562,7 +3507,6 @@ code,
 
   .wallet-item,
   .bank-item,
-  .admin-blocked-item,
   .goal-card__head,
   .goal-card__actions,
   .budget-progress-card__head,

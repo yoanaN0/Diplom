@@ -43,6 +43,7 @@ function Wallets() {
 	const [editingWallet, setEditingWallet] = useState(null);
 	const [allTransactions, setAllTransactions] = useState([]);
 	const [categoryOptions, setCategoryOptions] = useState([]);
+	const [categoryLoadError, setCategoryLoadError] = useState("");
 	const [importDraft, setImportDraft] = useState({
 		isOpen: false,
 		walletId: null,
@@ -60,11 +61,19 @@ function Wallets() {
 		setError("");
 
 		try {
-			const [items, nextTransactions, nextCategories] = await Promise.all([
+			const [items, nextTransactions] = await Promise.all([
 				getWallets(),
 				getTransactions(),
-				getCategories(),
 			]);
+			let nextCategories = [];
+
+			try {
+				nextCategories = await getCategories();
+				setCategoryLoadError("");
+			} catch {
+				setCategoryLoadError("Категориите не се заредиха. Презареди страницата и опитай пак.");
+			}
+
 			const nextCashWallets = items.filter((item) => item.walletType === "cash");
 			const nextBankWallets = items.filter((item) => item.walletType === "bank");
 			const nextCategoryOptions = Array.isArray(nextCategories) ? nextCategories : [];
@@ -612,6 +621,7 @@ function Wallets() {
 
 							{importDraft.preview ? (
 								<>
+									{categoryLoadError ? <p className="muted csv-import-error">{categoryLoadError}</p> : null}
 									<div className="csv-import-summary-grid">
 										<span className="csv-import-summary-chip csv-import-summary-chip--valid">Валидни: {importDraft.preview.validRows}</span>
 										<span className="csv-import-summary-chip csv-import-summary-chip--duplicate">Дубликати: {importDraft.preview.duplicateRows}</span>
@@ -679,6 +689,10 @@ function Wallets() {
 															{(() => {
 																const rowCategories = getCategoriesForType(row.type || "expense");
 																const selectedCategory = row.category && rowCategories.includes(row.category) ? row.category : "";
+
+																if (categoryLoadError || rowCategories.length === 0) {
+																	return <span className="muted">Няма заредени категории за избор.</span>;
+																}
 
 																return (
 																	<select

@@ -7,6 +7,7 @@ require __DIR__ . '/../lib/response.php';
 require __DIR__ . '/../lib/db.php';
 require __DIR__ . '/../lib/api_helpers.php';
 require __DIR__ . '/../lib/admin_helpers.php';
+require __DIR__ . '/../lib/category_defaults.php';
 
 $method = api_method();
 $pdo = api_pdo();
@@ -15,7 +16,7 @@ $data = api_request_data();
 
 admin_install_schema($pdo);
 admin_ensure_user_meta($pdo, $userId);
-admin_require_admin($pdo, $userId);
+requireAdmin($pdo);
 
 function admin_datetime(?string $value): ?string
 {
@@ -41,11 +42,8 @@ function admin_user_payload(array $row, array $logs): array
         'lastName' => (string) $row['last_name'],
         'email' => (string) $row['email'],
         'registeredAt' => admin_datetime((string) ($row['created_at'] ?? '')),
-        'lastLoginAt' => admin_datetime($row['last_login_at'] ?? null),
         'profileStatus' => strtolower((string) ($row['profile_status'] ?? 'active')),
-        'role' => strtolower((string) ($row['role'] ?? 'user')),
         'isVerified' => (bool) ($row['is_verified'] ?? false),
-        'loginLogs' => $logs,
     ];
 }
 
@@ -56,128 +54,89 @@ function admin_load_users(PDO $pdo, array $filters): array
 
     $search = strtolower(trim((string) ($filters['search'] ?? '')));
     if ($search !== '') {
-        $where[] = '(LOWER(u.first_name) LIKE :search OR LOWER(u.last_name) LIKE :search OR LOWER(u.email) LIKE :search)';
+        $where[] = 'LOWER(u.email) LIKE :search';
         $params['search'] = '%' . $search . '%';
     }
 
-    $status = strtolower(trim((string) ($filters['status'] ?? 'all')));
-    if ($status !== '' && $status !== 'all' && in_array($status, ['active', 'blocked', 'deleted'], true)) {
-        $where[] = 'm.profile_status = :profile_status';
-        $params['profile_status'] = $status;
-    }
+    $countSql = sprintf(
+        'SELECT COUNT(*)
+         FROM users u
+         LEFT JOIN user_admin_meta m ON m.user_id = u.id
+         WHERE %s',
+        implode(' AND ', $where)
+    );
+    $countStmt = $pdo->prepare($countSql);
+    $countStmt->execute($params);
+    $totalUsers = (int) $countStmt->fetchColumn();
 
-    $role = strtolower(trim((string) ($filters['role'] ?? 'all')));
-    if ($role !== '' && $role !== 'all' && in_array($role, ['admin', 'user'], true)) {
-        $where[] = 'm.role = :role';
-        $params['role'] = $role;
-    }
+    $page = max(1, (int) ($filters['page'] ?? 1));
+    $pageSize = max(1, min(20, (int) ($filters['pageSize'] ?? 20)));
+    $offset = ($page - 1) * $pageSize;
 
     $sql = sprintf(
         'SELECT u.id, u.first_name, u.last_name, u.email, u.created_at,
-                m.role, m.profile_status, m.is_verified, m.last_login_at
+                m.profile_status, m.is_verified
          FROM users u
          LEFT JOIN user_admin_meta m ON m.user_id = u.id
          WHERE %s
-         ORDER BY u.created_at DESC, u.id DESC',
+         ORDER BY u.created_at DESC, u.id DESC
+         LIMIT :limit OFFSET :offset',
         implode(' AND ', $where)
     );
 
     $stmt = $pdo->prepare($sql);
-    $stmt->execute($params);
-    return $stmt->fetchAll();
+    foreach ($params as $key => $value) {
+        $stmt->bindValue(':' . $key, $value, PDO::PARAM_STR);
+    }
+    $stmt->bindValue(':limit', $pageSize, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->execute();
+
+    return [
+        'users' => $stmt->fetchAll(),
+        'pagination' => [
+            'page' => $page,
+            'pageSize' => $pageSize,
+            'totalUsers' => $totalUsers,
+            'totalPages' => $totalUsers > 0 ? (int) ceil($totalUsers / $pageSize) : 0,
+        ],
+    ];
 }
 
 function admin_stats(PDO $pdo): array
 {
-    $blockedStmt = $pdo->prepare('SELECT COUNT(*) FROM user_admin_meta WHERE profile_status = :profile_status');
-    $blockedStmt->execute(['profile_status' => 'blocked']);
-
-    $recent7Stmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)');
-    $recent7Stmt->execute();
-
-    $recent30Stmt = $pdo->prepare('SELECT COUNT(*) FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)');
-    $recent30Stmt->execute();
-
     return [
-        'usersCount' => admin_count($pdo, 'users'),
-        'blockedUsersCount' => (int) $blockedStmt->fetchColumn(),
-        'recent7Days' => (int) $recent7Stmt->fetchColumn(),
-        'recent30Days' => (int) $recent30Stmt->fetchColumn(),
+        'totalUsersCount' => admin_count($pdo, 'users'),
+        'verifiedUsersCount' => (int) $pdo->query('SELECT COUNT(*) FROM user_admin_meta WHERE is_verified = 1')->fetchColumn(),
+        'blockedUsersCount' => (int) $pdo->query("SELECT COUNT(*) FROM user_admin_meta WHERE profile_status = 'blocked'")->fetchColumn(),
     ];
 }
 
 if ($method === 'GET') {
-    $pdo->exec(
-        "INSERT INTO user_admin_meta (user_id, role, profile_status, is_verified)
-         SELECT u.id,
-                CASE WHEN u.id = 1 THEN 'admin' ELSE 'user' END,
-                'active',
-                0
-         FROM users u
-         ON DUPLICATE KEY UPDATE
-            role = COALESCE(role, VALUES(role)),
-            is_verified = COALESCE(is_verified, VALUES(is_verified))"
-    );
-
     $filters = [
         'search' => $_GET['search'] ?? '',
-        'status' => $_GET['status'] ?? 'all',
-        'role' => $_GET['role'] ?? 'all',
+        'page' => $_GET['page'] ?? 1,
+        'pageSize' => 20,
     ];
 
-    $rows = admin_load_users($pdo, $filters);
-    $userIds = array_values(array_filter(array_map(static fn (array $row): int => (int) $row['id'], $rows)));
-    $logsByUser = [];
-
-    if ($userIds !== []) {
-        $placeholders = implode(', ', array_fill(0, count($userIds), '?'));
-        $logsStmt = $pdo->prepare(
-            "SELECT id, user_id, email, ip_address, user_agent, is_success, login_at
-             FROM user_login_logs
-             WHERE user_id IN ($placeholders)
-             ORDER BY login_at DESC, id DESC"
-        );
-        $logsStmt->execute($userIds);
-        $rawLogs = $logsStmt->fetchAll();
-
-        foreach ($rawLogs as $logRow) {
-            $logUserId = (int) ($logRow['user_id'] ?? 0);
-            if ($logUserId <= 0) {
-                continue;
-            }
-
-            if (!isset($logsByUser[$logUserId])) {
-                $logsByUser[$logUserId] = [];
-            }
-
-            if (count($logsByUser[$logUserId]) >= 5) {
-                continue;
-            }
-
-            $logsByUser[$logUserId][] = [
-                'id' => (int) $logRow['id'],
-                'email' => $logRow['email'],
-                'ipAddress' => $logRow['ip_address'],
-                'userAgent' => $logRow['user_agent'],
-                'isSuccess' => (bool) $logRow['is_success'],
-                'loggedAt' => admin_datetime((string) ($logRow['login_at'] ?? '')),
-            ];
-        }
-    }
-
+    $result = admin_load_users($pdo, $filters);
     $users = array_map(
-        static fn (array $row): array => admin_user_payload($row, $logsByUser[(int) $row['id']] ?? []),
-        $rows
+        static fn (array $row): array => admin_user_payload($row, []),
+        $result['users']
     );
 
     json_response(200, [
         'ok' => true,
         'stats' => admin_stats($pdo),
+        'pagination' => $result['pagination'],
+        'csrfToken' => admin_csrf_token(),
         'users' => $users,
     ]);
 }
 
 if ($method === 'POST') {
+    admin_require_csrf();
+
     $firstName = trim((string) ($data['firstName'] ?? ''));
     $lastName = trim((string) ($data['lastName'] ?? ''));
     $email = mb_strtolower(trim((string) ($data['email'] ?? '')));
@@ -235,6 +194,7 @@ if ($method === 'POST') {
     ]);
 
     admin_ensure_user_meta($pdo, $newUserId);
+    category_seed_default_categories($pdo, $newUserId);
     $metaStmt = $pdo->prepare(
         'UPDATE user_admin_meta
          SET role = :role, profile_status = :profile_status
@@ -268,6 +228,8 @@ if ($method === 'POST') {
 }
 
 if ($method === 'PATCH') {
+    admin_require_csrf();
+
     $targetUserId = api_int_or_null($data['userId'] ?? $data['id'] ?? null);
     $nextStatus = mb_strtolower(trim((string) ($data['status'] ?? '')));
     $nextRole = mb_strtolower(trim((string) ($data['role'] ?? '')));
@@ -292,18 +254,26 @@ if ($method === 'PATCH') {
         json_response(422, ['ok' => false, 'error' => 'Няма посочена промяна.']);
     }
 
-    $userStmt = $pdo->prepare('SELECT id, role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
+    if ($nextStatus !== '' && $nextStatus !== 'active' && $nextStatus !== 'blocked') {
+        json_response(422, ['ok' => false, 'error' => 'Невалиден статус. Позволени: active, blocked.']);
+    }
+
+    $userStmt = $pdo->prepare('SELECT role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
     $userStmt->execute(['id' => $targetUserId]);
     $existingMeta = $userStmt->fetch();
     if (!$existingMeta) {
         admin_ensure_user_meta($pdo, $targetUserId);
-        $existingMeta = $pdo->prepare('SELECT id, role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
+        $existingMeta = $pdo->prepare('SELECT role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
         $existingMeta->execute(['id' => $targetUserId]);
         $existingMeta = $existingMeta->fetch();
     }
 
     if (!$existingMeta) {
         json_response(404, ['ok' => false, 'error' => 'Потребителят не е намерен.']);
+    }
+
+    if ($nextStatus !== '' && $targetUserId === $userId && $nextStatus === 'blocked') {
+        json_response(422, ['ok' => false, 'error' => 'Не можеш да блокираш собствения си профил.']);
     }
 
     $updates = [];
@@ -345,6 +315,8 @@ if ($method === 'PATCH') {
 }
 
 if ($method === 'PUT') {
+    admin_require_csrf();
+
     $targetUserId = api_int_or_null($data['userId'] ?? $data['id'] ?? null);
     $firstName = trim((string) ($data['firstName'] ?? ''));
     $lastName = trim((string) ($data['lastName'] ?? ''));
@@ -435,6 +407,8 @@ if ($method === 'PUT') {
 }
 
 if ($method === 'DELETE') {
+    admin_require_csrf();
+
     $targetUserId = api_int_or_null($data['userId'] ?? $data['id'] ?? null);
 
     if (!$targetUserId) {
@@ -445,13 +419,13 @@ if ($method === 'DELETE') {
         json_response(422, ['ok' => false, 'error' => 'Не можеш да изтриеш собствения си профил.']);
     }
 
-    $userStmt = $pdo->prepare('SELECT id, role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
+    $userStmt = $pdo->prepare('SELECT role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
     $userStmt->execute(['id' => $targetUserId]);
     $meta = $userStmt->fetch();
 
     if (!$meta) {
         admin_ensure_user_meta($pdo, $targetUserId);
-        $userStmt = $pdo->prepare('SELECT id, role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
+        $userStmt = $pdo->prepare('SELECT role FROM user_admin_meta WHERE user_id = :id LIMIT 1');
         $userStmt->execute(['id' => $targetUserId]);
         $meta = $userStmt->fetch();
     }

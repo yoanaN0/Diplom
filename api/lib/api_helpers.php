@@ -32,6 +32,17 @@ function api_user_id(): int
     }
 
     $pdo = api_pdo();
+    if (api_table_exists($pdo, 'users')) {
+        $userStmt = $pdo->prepare('SELECT 1 FROM users WHERE id = :user_id LIMIT 1');
+        $userStmt->execute(['user_id' => $userId]);
+
+        if (!$userStmt->fetchColumn()) {
+            session_unset();
+            session_destroy();
+            json_response(401, ['ok' => false, 'error' => 'Unauthenticated']);
+        }
+    }
+
     if (api_table_exists($pdo, 'user_admin_meta')) {
         $stmt = $pdo->prepare('SELECT profile_status FROM user_admin_meta WHERE user_id = :user_id LIMIT 1');
         $stmt->execute(['user_id' => $userId]);

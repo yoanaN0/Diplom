@@ -141,11 +141,63 @@ function admin_track_login(PDO $pdo, ?int $userId, ?string $email, bool $isSucce
     }
 }
 
-function admin_require_admin(PDO $pdo, int $userId): void
+function admin_csrf_token(): string
 {
-    $meta = admin_get_user_meta($pdo, $userId);
+    $token = (string) ($_SESSION['admin_csrf_token'] ?? '');
 
-    if (!$meta || $meta['role'] !== 'admin' || $meta['profileStatus'] !== 'active') {
+    if ($token === '') {
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['admin_csrf_token'] = $token;
+    }
+
+    return $token;
+}
+
+function admin_require_csrf(): void
+{
+    $expectedToken = admin_csrf_token();
+    $providedToken = trim((string) ($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''));
+
+    if ($providedToken === '' || !hash_equals($expectedToken, $providedToken)) {
+        json_response(403, ['ok' => false, 'error' => 'Невалиден CSRF token.']);
+    }
+}
+
+function requireAdmin(PDO $pdo): int
+{
+    $userId = api_user_id();
+
+    $stmt = $pdo->prepare(
+        'SELECT u.id,
+                COALESCE(m.role, "user") AS role,
+                COALESCE(m.profile_status, "active") AS profile_status
+         FROM users u
+         LEFT JOIN user_admin_meta m ON m.user_id = u.id
+         WHERE u.id = :user_id
+         LIMIT 1'
+    );
+    $stmt->execute(['user_id' => $userId]);
+    $meta = $stmt->fetch();
+
+    if (!$meta) {
+        json_response(401, ['ok' => false, 'error' => 'Unauthenticated']);
+    }
+
+    $profileStatus = strtolower((string) ($meta['profile_status'] ?? 'active'));
+    if (in_array($profileStatus, ['blocked', 'deleted'], true)) {
+        session_unset();
+        session_destroy();
+        json_response(401, ['ok' => false, 'error' => 'Профилът е ограничен. Свържи се с администратор.']);
+    }
+
+    if (strtolower((string) ($meta['role'] ?? 'user')) !== 'admin') {
         json_response(403, ['ok' => false, 'error' => 'Недостатъчни права.']);
     }
+
+    return $userId;
+}
+
+function admin_require_admin(PDO $pdo, ?int $userId = null): void
+{
+    requireAdmin($pdo);
 }

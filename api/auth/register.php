@@ -6,6 +6,7 @@ require __DIR__ . '/../bootstrap.php';
 require __DIR__ . '/../lib/response.php';
 require __DIR__ . '/../lib/db.php';
 require __DIR__ . '/../lib/admin_helpers.php';
+require __DIR__ . '/../lib/category_defaults.php';
 require __DIR__ . '/../lib/email_verification.php';
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
@@ -63,6 +64,7 @@ $profileStmt->execute([
 ]);
 
 admin_ensure_user_meta($pdo, $userId);
+category_seed_default_categories($pdo, $userId);
 
 $verificationResult = email_verification_issue_code($pdo, $userId, $email);
 if (!$verificationResult['ok']) {

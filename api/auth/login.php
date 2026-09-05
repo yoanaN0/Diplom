@@ -43,13 +43,14 @@ if (!$user || !password_verify($password, $user['password_hash'])) {
 admin_ensure_user_meta($pdo, (int) $user['id']);
 $meta = admin_get_user_meta($pdo, (int) $user['id']);
 $profileStatus = $meta['profileStatus'] ?? 'active';
+$role = strtolower((string) ($meta['role'] ?? 'user'));
 
 if (in_array($profileStatus, ['blocked', 'deleted'], true)) {
     admin_track_login($pdo, (int) $user['id'], $email, false);
     json_response(403, ['ok' => false, 'error' => 'Профилът е ограничен. Свържи се с администратор.']);
 }
 
-if (!($meta['isVerified'] ?? false)) {
+if ($role !== 'admin' && !($meta['isVerified'] ?? false)) {
     $issueResult = email_verification_issue_code($pdo, (int) $user['id'], $email);
     admin_track_login($pdo, (int) $user['id'], $email, false);
 

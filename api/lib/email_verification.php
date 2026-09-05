@@ -381,8 +381,6 @@ function email_verification_issue_code(PDO $pdo, int $userId, string $email, int
         return ['ok' => false, 'error' => 'Неуспешно генериране на код.'];
     }
 
-    $expiresAt = date('Y-m-d H:i:s', time() + ($ttlMinutes * 60));
-
     $pdo->beginTransaction();
 
     try {
@@ -395,11 +393,11 @@ function email_verification_issue_code(PDO $pdo, int $userId, string $email, int
 
         $insert = $pdo->prepare(
             'INSERT INTO user_email_verification_codes (user_id, code_hash, attempts, expires_at, used_at)
-               VALUES (:user_id, :code_hash, 0, :expires_at, NULL)'
+                             VALUES (:user_id, :code_hash, 0, DATE_ADD(NOW(), INTERVAL :ttl_minutes MINUTE), NULL)'
         );
         $insert->bindValue(':user_id', $userId, PDO::PARAM_INT);
         $insert->bindValue(':code_hash', $codeHash, PDO::PARAM_STR);
-          $insert->bindValue(':expires_at', $expiresAt, PDO::PARAM_STR);
+                $insert->bindValue(':ttl_minutes', $ttlMinutes, PDO::PARAM_INT);
         $insert->execute();
 
         $pdo->commit();
